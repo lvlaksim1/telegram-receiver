@@ -21,7 +21,7 @@ jobs:
     timeout-minutes: 345
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Read receiver state
         id: state
