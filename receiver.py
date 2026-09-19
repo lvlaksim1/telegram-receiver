@@ -533,7 +533,6 @@ def validate_consumer_action(event_id: str, action: dict[str, Any]) -> dict[str,
 class Runtime:
     config: dict[str, Any]
     telegram: TelegramClient
-    store: GitHubRuntimeStore
     consumer: ConsumerRunner
     allowed_chat_id: Optional[str]
 
@@ -542,24 +541,15 @@ class Runtime:
         config = load_config(config_path)
 
         telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-        runtime_token = os.environ.get("RECEIVER_GITHUB_TOKEN", "").strip()
-        repository = os.environ.get("RECEIVER_REPOSITORY", "").strip()
         allowed_chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip() or None
         consumer_dir = os.environ.get("CONSUMER_DIR", "").strip()
 
-        runtime_branch = str(config.get("runtime_branch", "receiver-runtime")).strip()
         consumer_image = str(config.get("consumer_image", "python:3.12-slim")).strip()
         consumer_script = str(config.get("consumer_script", "consumer.py")).strip()
         consumer_timeout = int(config.get("consumer_timeout_seconds", 60))
 
         if not telegram_token:
             raise ReceiverError("TELEGRAM_BOT_TOKEN is not configured")
-        if not runtime_token:
-            raise ReceiverError("RECEIVER_GITHUB_TOKEN is not configured")
-        if not repository or "/" not in repository:
-            raise ReceiverError("RECEIVER_REPOSITORY is not configured")
-        if not runtime_branch:
-            raise ReceiverError("runtime_branch must not be empty")
         if not consumer_dir:
             raise ReceiverError("CONSUMER_DIR is not configured")
         if not consumer_image:
@@ -570,7 +560,6 @@ class Runtime:
         return cls(
             config=config,
             telegram=TelegramClient(telegram_token),
-            store=GitHubRuntimeStore(runtime_token, repository, runtime_branch),
             consumer=ConsumerRunner(
                 directory=consumer_dir,
                 image=consumer_image,
@@ -587,81 +576,50 @@ class Runtime:
             raise ReceiverError(
                 "Telegram webhook is active. getUpdates cannot be used until the webhook is removed."
             )
-        self.store.check_branch()
-        self.store.load_state()
         self.consumer.check()
-        print(
-            f"preflight_ok runtime_branch={self.store.branch} consumer_isolated=true",
-            flush=True,
-        )
+        print("preflight_ok processing=direct_fifo consumer_isolated=true", flush=True)
 
-    def process_event(self, event_id: str) -> str:
-        receipt = self.store.get_receipt(event_id)
-        if receipt is not None:
-            self.store.complete(event_id)
-            print(f"event_already_completed update_id={event_id}", flush=True)
-            return "already_completed"
+    def process_update(self, update: dict[str, Any]) -> str:
+        update_id = update.get("update_id")
+        if not isinstance(update_id, int):
+            raise ReceiverError("Telegram update is missing integer update_id")
 
-        inbox = self.store.get_inbox(event_id)
-        update = inbox.get("update")
-        if not isinstance(update, dict):
-            raise ReceiverError(f"Invalid inbox update for event {event_id}")
+        event_id = str(update_id)
+        started = time.monotonic()
 
-        action = self.store.get_outbox(event_id)
-        if action is None:
-            consumer_event = {
-                "schema_version": 1,
-                "event_id": event_id,
-                "received_at": inbox.get("received_at"),
-                "update": update,
-            }
-            action = validate_consumer_action(event_id, self.consumer.process(consumer_event))
-            self.store.save_outbox(event_id, action)
-        else:
-            action = validate_consumer_action(event_id, action)
+        consumer_event = {
+            "schema_version": 1,
+            "event_id": event_id,
+            "received_at": utc_now(),
+            "update": update,
+        }
 
-        action_type = action["action"]
-        if action_type == "no_reply":
-            self.store.save_receipt(
-                event_id,
-                {
-                    "schema_version": 1,
-                    "event_id": event_id,
-                    "action": "no_reply",
-                    "completed_at": utc_now(),
-                },
+        consumer_started = time.monotonic()
+        action = validate_consumer_action(event_id, self.consumer.process(consumer_event))
+        consumer_ms = round((time.monotonic() - consumer_started) * 1000)
+
+        if action["action"] == "no_reply":
+            total_ms = round((time.monotonic() - started) * 1000)
+            print(
+                f"event_completed update_id={event_id} action=no_reply "
+                f"consumer_ms={consumer_ms} total_ms={total_ms}",
+                flush=True,
             )
-            self.store.complete(event_id)
-            print(f"event_completed update_id={event_id} action=no_reply", flush=True)
             return "no_reply"
 
+        send_started = time.monotonic()
         sent = self.telegram.send_reply(update, action["text"])
+        send_ms = round((time.monotonic() - send_started) * 1000)
         sent_message_id = sent.get("message_id")
-        self.store.save_receipt(
-            event_id,
-            {
-                "schema_version": 1,
-                "event_id": event_id,
-                "action": "reply",
-                "telegram_message_id": sent_message_id,
-                "completed_at": utc_now(),
-            },
-        )
-        self.store.complete(event_id)
+        total_ms = round((time.monotonic() - started) * 1000)
+
         print(
-            f"event_completed update_id={event_id} action=reply message_id={sent_message_id}",
+            f"event_completed update_id={event_id} action=reply "
+            f"message_id={sent_message_id} consumer_ms={consumer_ms} "
+            f"send_ms={send_ms} total_ms={total_ms}",
             flush=True,
         )
         return "reply"
-
-    def drain_pending(self) -> int:
-        processed = 0
-        while True:
-            event_id = self.store.next_pending()
-            if event_id is None:
-                return processed
-            self.process_event(event_id)
-            processed += 1
 
     def run(self) -> None:
         max_runtime = int(self.config.get("max_runtime_seconds", 19800))
@@ -674,25 +632,28 @@ class Runtime:
         deadline = time.monotonic() + max_runtime
         offset: Optional[int] = None
         backoff = 1
-        queued = 0
         processed = 0
         filtered = 0
 
         print(
-            f"receiver_started runtime_branch={self.store.branch} max_runtime={max_runtime}s",
+            f"receiver_started processing=direct_fifo max_runtime={max_runtime}s",
             flush=True,
         )
 
         while time.monotonic() < deadline:
             try:
-                processed += self.drain_pending()
-
                 updates = self.telegram.get_updates(
                     offset=offset,
                     timeout=long_poll_timeout,
                     allowed_updates=allowed_updates,
                 )
                 backoff = 1
+
+                updates.sort(
+                    key=lambda item: item.get("update_id")
+                    if isinstance(item.get("update_id"), int)
+                    else -1
+                )
 
                 for update in updates:
                     update_id = update.get("update_id")
@@ -713,11 +674,9 @@ class Runtime:
                         )
                         continue
 
-                    status = self.store.enqueue(update)
+                    self.process_update(update)
+                    processed += 1
                     offset = update_id + 1
-                    if status == "queued":
-                        queued += 1
-                    processed += self.drain_pending()
 
             except ReceiverError as exc:
                 print(f"receiver_retry error={exc} retry_in={backoff}s", file=sys.stderr, flush=True)
@@ -736,7 +695,7 @@ class Runtime:
                 print(f"final_confirmation_failed error={exc}", file=sys.stderr, flush=True)
 
         print(
-            f"receiver_stopped queued={queued} processed={processed} filtered={filtered} next_offset={offset}",
+            f"receiver_stopped processed={processed} filtered={filtered} next_offset={offset}",
             flush=True,
         )
 
