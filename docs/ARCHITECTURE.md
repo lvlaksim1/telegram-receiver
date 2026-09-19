@@ -2,110 +2,122 @@
 
 ## Purpose
 
-`telegram-receiver` is a receive-only transport gateway:
+`telegram-receiver` owns the complete Telegram transport boundary.
 
 ```text
-Telegram Bot API -> GitHub Actions receiver -> repository_dispatch -> consumer repository
+Telegram <-> Receiver <-> durable queue <-> isolated consumer
 ```
 
-It deliberately contains no application commands, AI logic, reply generation or Telegram send operations.
+The durable queue is stored in the `receiver-runtime` branch of this repository.
 
 ## Core invariants
 
-1. **Only one active `getUpdates` consumer.**  
-   Receiver workflow runs share one GitHub Actions concurrency group.
+1. Only Receiver has Telegram credentials.
+2. Consumer code receives no Telegram or GitHub credentials.
+3. One Telegram update never creates one GitHub Actions runner.
+4. Updates are processed in strict increasing `update_id` order.
+5. Every accepted update is persisted before Telegram is allowed to confirm it.
+6. Runner-local state is never authoritative.
+7. Existing receipts suppress processing of already completed updates.
+8. Raw message bodies are not written to operational logs.
+9. Runtime queue data is currently public by explicit design choice for the test stage.
 
-2. **Dispatch before confirmation.**  
-   An update is forwarded to the consumer before the receiver advances the Telegram offset past that update.
-
-3. **Prefer duplicates over loss.**  
-   A crash after GitHub accepts the event but before Telegram confirmation can cause redelivery. Consumers deduplicate by `update_id`.
-
-4. **No runner-local state is authoritative.**  
-   A GitHub-hosted runner may disappear at any time. Correctness must not depend on files, SQLite, RAM or caches on that runner.
-
-5. **Telegram remains the inbound queue.**  
-   Unconfirmed updates remain at Telegram. The receiver does not copy message bodies into the public repository.
-
-6. **Webhook configuration is never changed automatically.**  
-   If a webhook exists, preflight fails instead of deleting it.
-
-7. **No message body in operational logs.**  
-   Logs may include `update_id`, chat ID and counters, but not Telegram message text or the raw update object.
-
-8. **Transport boundary is GitHub event acceptance.**  
-   HTTP 204 from `repository_dispatch` means the receiver considers the update delivered to GitHub. Successful execution of the consumer workflow is a separate responsibility.
-
-## Worker lifecycle
-
-GitHub-hosted jobs have a finite execution window. A receiver worker therefore runs for approximately 5.5 hours.
-
-On startup:
-
-1. checkout current default branch;
-2. verify `enabled=true`;
-3. validate required secrets/configuration;
-4. verify the Telegram bot and ensure no webhook is active;
-5. verify access to the consumer repository;
-6. queue exactly one successor run;
-7. enter Telegram long polling.
-
-The successor is held by the shared concurrency group while the current worker runs. When the current worker exits, the queued successor becomes eligible to start.
-
-A separate watchdog checks every 15 minutes. If the receiver is enabled but neither an active nor queued receiver run exists, it requests a new worker.
-
-## Telegram offset rule
+## Event lifecycle
 
 For update `N`:
 
 ```text
-getUpdates -> receive N
-repository_dispatch(N) -> must return 204
-next offset becomes N + 1
-next getUpdates(offset=N+1) -> confirms N at Telegram
+getUpdates
+  ↓
+persist runtime/inbox/N.json
+  ↓
+append N to runtime/state.json
+  ↓
+run consumer in isolated container
+  ↓
+persist runtime/outbox/N.json
+  ↓
+Receiver calls Telegram sendMessage if requested
+  ↓
+persist runtime/receipts/N.json
+  ↓
+remove N from pending state
+  ↓
+only then continue with N+1
 ```
 
-If dispatch fails, offset is not advanced past that update.
+If processing fails, Receiver retries the oldest pending event before polling for newer Telegram updates.
 
-If the runner dies after dispatch succeeds but before confirmation, Telegram can redeliver `N`. This is intentional at-least-once behavior.
+## Consumer isolation
+
+The configured public consumer repository is cloned once per Receiver worker.
+
+Consumer execution uses Docker with:
+
+- no Receiver environment variables;
+- no Telegram token;
+- no GitHub token;
+- no network;
+- read-only filesystem;
+- dropped Linux capabilities;
+- no-new-privileges;
+- unprivileged UID/GID.
+
+The consumer reads one JSON event from stdin and writes one JSON action to stdout.
+
+Supported actions currently:
+
+- `reply`
+- `no_reply`
+
+Receiver validates the action and controls the Telegram destination.
+
+## Runtime branch
+
+`receiver-runtime` is runtime storage and is never merged into `main`.
+
+Paths:
+
+```text
+runtime/state.json
+runtime/inbox/<update_id>.json
+runtime/outbox/<update_id>.json
+runtime/receipts/<update_id>.json
+```
+
+Only the Receiver worker writes these objects.
+
+## Worker lifecycle
+
+The Receiver uses a serialized handover:
+
+1. start;
+2. preflight Telegram, runtime branch and consumer runtime;
+3. queue one successor;
+4. run for about 5.5 hours;
+5. exit;
+6. queued successor starts.
+
+A watchdog recreates the chain if no active or queued Receiver run exists.
 
 ## Failure model
 
-| Failure | Receiver behavior | Consequence |
-|---|---|---|
-| Runner dies before dispatch | Telegram update stays unconfirmed | successor retries |
-| GitHub dispatch API fails | offset is not advanced | same update retries with backoff |
-| Runner dies after dispatch but before confirmation | Telegram can redeliver | possible duplicate |
-| Consumer workflow fails after dispatch was accepted | receiver does not know | consumer owns retry/idempotency |
-| Worker chain disappears | watchdog requests a worker | temporary latency |
-| Telegram webhook exists | preflight fails | no destructive webhook change |
-| GitHub/receiver unavailable for more than Telegram retention window | Telegram may discard old updates | possible loss |
+| Failure | Recovery |
+|---|---|
+| runner dies before inbox persistence | Telegram can redeliver the update |
+| runner dies after inbox persistence | next worker resumes from pending state |
+| consumer fails | oldest pending event retries; newer events do not overtake it |
+| runner dies after outbox persistence | next worker reuses the existing action |
+| Telegram send fails | same pending event retries |
+| runner dies after Telegram accepts reply but before receipt | reply may be duplicated |
+| worker chain disappears | watchdog requests another worker |
 
-Telegram documents that pending updates are retained for no longer than 24 hours. Therefore GitHub-only operation cannot guarantee recovery from an outage longer than that without adding a separate durable inbox.
+The last case is the only remaining unavoidable duplicate window because Telegram `sendMessage` has no Receiver-controlled idempotency key.
 
 ## Security model
 
-Secrets:
+The test consumer repository intentionally has no `TELEGRAM_BOT_TOKEN` and no `TELEGRAM_CHAT_ID`.
 
-- `TELEGRAM_BOT_TOKEN` — Telegram credential.
-- `TELEGRAM_CHAT_ID` — optional/standard chat allow-list value.
-- `CONSUMER_DISPATCH_TOKEN` — dedicated GitHub credential for dispatching to the consumer repository.
+The high-privilege `REPO_FACTORY_TOKEN` remains confined to `repo-factory`.
 
-The high-privilege `REPO_FACTORY_TOKEN` must never be copied into this repository.
-
-The consumer dispatch credential should have only the GitHub permissions needed for `POST /repos/{owner}/{repo}/dispatches`.
-
-## Public repository considerations
-
-The repository can remain public because:
-
-- secret values are stored only as GitHub Actions secrets;
-- raw Telegram updates are not committed;
-- receiver logs do not print raw update bodies;
-- runtime state is operational metadata only.
-
-A consumer may still handle sensitive Telegram content, so its own visibility and logging policy must be chosen separately.
-
-## Current known boundary
-
-The current design guarantees at-least-once delivery **to GitHub's repository-dispatch endpoint**, not successful business processing by the consumer. End-to-end acknowledgement would require a return credential/channel from the consumer and is intentionally outside the receive-only transport MVP.
+The old per-update `CONSUMER_DISPATCH_TOKEN` transport is no longer part of the message path.
