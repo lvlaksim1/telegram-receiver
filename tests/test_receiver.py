@@ -42,7 +42,7 @@ class MessageContextTests(unittest.TestCase):
 
 
 class TelegramClientTests(unittest.TestCase):
-    def test_send_reply_does_not_use_reply_parameters(self):
+    def test_send_reply_uses_reply_parameters(self):
         client = receiver.TelegramClient("token")
         with patch.object(
             client,
@@ -65,7 +65,7 @@ class TelegramClientTests(unittest.TestCase):
         self.assertEqual(method, "sendMessage")
         self.assertEqual(payload["chat_id"], 123)
         self.assertEqual(payload["text"], "answer")
-        self.assertNotIn("reply_parameters", payload)
+        self.assertEqual(payload["reply_parameters"], {"message_id": 9})
 
 
 class ConfigTests(unittest.TestCase):
