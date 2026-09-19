@@ -343,17 +343,27 @@ class GitHubRuntimeStore:
         if self.get_json(f"runtime/receipts/{event_id}.json") is not None:
             return "completed"
 
-        self.put_json(
-            f"runtime/inbox/{event_id}.json",
-            {
-                "schema_version": 1,
-                "event_id": event_id,
-                "received_at": utc_now(),
-                "update": update,
-            },
-            message=f"Queue Telegram update {event_id}",
-            immutable=True,
-        )
+        inbox_path = f"runtime/inbox/{event_id}.json"
+        existing_inbox = self.get_json(inbox_path)
+        if existing_inbox is None:
+            self.put_json(
+                inbox_path,
+                {
+                    "schema_version": 1,
+                    "event_id": event_id,
+                    "received_at": utc_now(),
+                    "update": update,
+                },
+                message=f"Queue Telegram update {event_id}",
+                immutable=True,
+            )
+        else:
+            existing_inbox.pop("_github_sha", None)
+            if (
+                str(existing_inbox.get("event_id") or "") != event_id
+                or existing_inbox.get("update") != update
+            ):
+                raise ReceiverError(f"Stored inbox object differs for event {event_id}")
 
         state = self.load_state()
         pending = [str(item) for item in state["pending"]]
