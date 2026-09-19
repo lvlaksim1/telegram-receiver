@@ -39,6 +39,17 @@ jobs:
             echo "probe=ok" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Check consumer dispatch
+        id: dispatch
+        env:
+          CONSUMER_DISPATCH_TOKEN: ${{ secrets.CONSUMER_DISPATCH_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${CONSUMER_DISPATCH_TOKEN:-}"
+          python3 receiver.py dispatch-probe
+          echo "probe=ok" >> "$GITHUB_OUTPUT"
+
       - name: Report result
         if: always()
         env:
@@ -47,11 +58,12 @@ jobs:
           JOB_STATUS: ${{ job.status }}
           WEBHOOK: ${{ steps.telegram.outputs.webhook }}
           PROBE: ${{ steps.telegram.outputs.probe }}
+          DISPATCH_PROBE: ${{ steps.dispatch.outputs.probe }}
         shell: bash
         run: |
           set -euo pipefail
           if [ "$JOB_STATUS" = "success" ]; then
-            BODY="HEALTH_OK: telegram credentials accepted; webhook=$WEBHOOK; long_poll_probe=$PROBE"
+            BODY="HEALTH_OK: telegram credentials accepted; webhook=$WEBHOOK; long_poll_probe=$PROBE; dispatch_probe=$DISPATCH_PROBE"
           else
             BODY="HEALTH_FAILED: inspect the Actions run"
           fi
