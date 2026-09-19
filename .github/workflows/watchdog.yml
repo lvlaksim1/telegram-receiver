@@ -1,0 +1,45 @@
+name: Receiver Watchdog
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure receiver has a live or queued run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ENABLED="$(jq -r '.enabled == true' receiver-config.json)"
+          if [ "$ENABLED" != "true" ]; then
+            echo "Receiver is disabled."
+            exit 0
+          fi
+
+          ACTIVE_COUNT="$(
+            gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/receiver.yml/runs?per_page=50"               --jq '[.workflow_runs[] | select(.status != "completed")] | length'
+          )"
+
+          if [ "$ACTIVE_COUNT" -gt 0 ]; then
+            echo "Receiver already has $ACTIVE_COUNT active or queued run(s)."
+            exit 0
+          fi
+
+          printf '%s' '{"event_type":"receiver_start","client_payload":{"source":"watchdog"}}' |
+            gh api               --method POST               "repos/${GITHUB_REPOSITORY}/dispatches"               --input -
+
+          echo "Receiver start requested."
