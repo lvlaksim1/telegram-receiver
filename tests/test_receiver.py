@@ -112,41 +112,6 @@ class ConsumerActionTests(unittest.TestCase):
             )
 
 
-class RuntimeStoreTests(unittest.TestCase):
-    def test_enqueue_orders_pending_ids(self):
-        store = receiver.GitHubRuntimeStore("token", "owner/repo", "runtime")
-        files = {
-            receiver.STATE_PATH: {
-                "schema_version": 1,
-                "pending": ["10"],
-                "updated_at": "x",
-            }
-        }
-
-        def get_json(path):
-            value = files.get(path)
-            return dict(value) if value is not None else None
-
-        def put_json(path, data, **kwargs):
-            files[path] = json.loads(json.dumps(data))
-            return True
-
-        store.get_json = get_json
-        store.put_json = put_json
-
-        self.assertEqual(store.enqueue({"update_id": 2, "message": {}}), "queued")
-        self.assertEqual(files[receiver.STATE_PATH]["pending"], ["2", "10"])
-
-    def test_completed_update_is_not_requeued(self):
-        store = receiver.GitHubRuntimeStore("token", "owner/repo", "runtime")
-        store.get_json = lambda path: (
-            {"schema_version": 1, "event_id": "2"}
-            if path == "runtime/receipts/2.json"
-            else None
-        )
-        self.assertEqual(store.enqueue({"update_id": 2}), "completed")
-
-
 class RuntimeEnvironmentTests(unittest.TestCase):
     def test_disabled_check_does_not_require_secrets(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -165,7 +130,6 @@ class RuntimeEnvironmentTests(unittest.TestCase):
                 json.dumps(
                     {
                         "enabled": True,
-                        "runtime_branch": "receiver-runtime",
                         "consumer_image": "python:3.12-slim",
                         "consumer_script": "consumer.py",
                     }
@@ -175,7 +139,6 @@ class RuntimeEnvironmentTests(unittest.TestCase):
             env = {
                 "TELEGRAM_BOT_TOKEN": "bot-token",
                 "TELEGRAM_CHAT_ID": "123",
-                "RECEIVER_REPOSITORY": "owner/repo",
                 "CONSUMER_DIR": str(consumer_dir),
             }
             with patch.dict(os.environ, env, clear=True):
