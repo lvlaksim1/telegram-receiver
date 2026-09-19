@@ -55,11 +55,21 @@ A narrow duplicate window remains if the process dies after successful Telegram 
 - branch: `receiver-checkpoint`
 - path: `state/checkpoint.json`
 
+## Live operational verification
+
+The hardened worker was restarted successfully:
+- active Receiver run #12;
+- queued successor run #13;
+- preflight passed;
+- `[RECEIVER_HEALTHCHECK]` returned `HEALTH_OK`;
+- checkpoint branch/file is readable;
+- health does not consume Telegram updates.
+
 ## Next verification
 
-After the worker is restarted on this hardened baseline:
-1. run `[RECEIVER_HEALTHCHECK]`;
-2. send one ordinary Telegram message and confirm immediate reply + reply binding;
-3. optionally send a short burst and confirm order remains unchanged.
+The only remaining smoke test for this exact hardened build is one ordinary Telegram message. It should:
+1. reply immediately;
+2. preserve reply binding;
+3. write the completed `update_id` into `receiver-checkpoint/state/checkpoint.json`.
 
-If these pass, continue development from this baseline.
+The previously proven FIFO behavior remains protected by regression tests.
