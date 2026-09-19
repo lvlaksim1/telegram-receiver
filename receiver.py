@@ -218,8 +218,6 @@ class TelegramClient:
             raise ReceiverError("Cannot reply to update without a message chat")
 
         payload: dict[str, Any] = {"chat_id": chat_id, "text": text}
-        if message_id is not None:
-            payload["reply_parameters"] = {"message_id": message_id}
         if thread_id is not None:
             payload["message_thread_id"] = thread_id
 
