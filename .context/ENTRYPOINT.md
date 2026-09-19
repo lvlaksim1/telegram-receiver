@@ -46,4 +46,6 @@ Rules:
 
 Record significant project facts, decisions, requirements, rejected approaches, blockers and handoff state. Do not erase old decisions when architecture changes; mark them superseded/deprecated and point to the replacement.
 
-See `.context/decisions/2026-09-19-direct-fifo.md` for the decisive architecture correction.
+See:
+- `.context/decisions/2026-09-19-direct-fifo.md` for the realtime/FIFO correction;
+- `.context/decisions/2026-09-20-checkpoint-recovery.md` for persistent recovery and non-consuming health rules.
