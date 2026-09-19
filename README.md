@@ -1,41 +1,57 @@
 # telegram-receiver
 
-GitHub-native Telegram gateway with a durable in-repository queue.
+GitHub-native Telegram receiver with one persistent worker and strict sequential processing.
 
 Only `telegram-receiver` talks to Telegram. Consumer code never receives `TELEGRAM_BOT_TOKEN` or `TELEGRAM_CHAT_ID`.
 
-## Data path
+## Current data path
 
 ```text
-Telegram
-   ↕
-Receiver worker
-   ↓
-receiver-runtime branch
-   ├─ runtime/inbox/
-   ├─ runtime/outbox/
-   ├─ runtime/receipts/
-   └─ runtime/state.json
-   ↓
+Telegram getUpdates
+      ↓
+persistent Receiver worker
+      ↓
 isolated consumer container
-   ↓
-Receiver worker
-   ↓
+      ↓
+Receiver sendMessage
+      ↓
 Telegram
 ```
 
-One Telegram update no longer creates one GitHub Actions run.
+There is no per-message `repository_dispatch`, no per-message GitHub Actions runner, and no GitHub Contents/API queue in the hot path.
 
-The already-running Receiver worker executes the configured consumer locally in an isolated Docker container and processes updates strictly in arrival order.
+## Ordering
 
-## Security boundary
+Updates returned by Telegram are sorted by numeric `update_id` and processed one at a time.
 
-Secrets exist only in `telegram-receiver`:
+```text
+update N
+  ↓
+consumer N
+  ↓
+send reply N
+  ↓
+update N+1
+```
 
-- `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_CHAT_ID`
+A later message cannot overtake an earlier message inside the Receiver.
 
-The consumer receives no Telegram or GitHub credentials.
+This direct FIFO path was validated on 2026-09-19 with:
+- one-message test `TEST_D`: reply arrived immediately without a second trigger message;
+- burst test `1 2 3 4 5`: all replies arrived in the correct order.
+
+## Consumer isolation
+
+The configured consumer repository is cloned once when a Receiver worker starts.
+
+Each event is executed inside a restricted Docker container with:
+- no network;
+- read-only filesystem;
+- dropped Linux capabilities;
+- `no-new-privileges`;
+- unprivileged UID/GID;
+- no Telegram token;
+- no GitHub token.
 
 The consumer contract is stdin/stdout JSON:
 
@@ -43,77 +59,36 @@ The consumer contract is stdin/stdout JSON:
 receiver event JSON -> consumer -> action JSON
 ```
 
-For example:
+Supported actions:
+- `reply`
+- `no_reply`
 
-```json
-{
-  "schema_version": 1,
-  "event_id": "553795842",
-  "action": "reply",
-  "text": "ответ: 111"
-}
-```
-
-The consumer cannot choose the Telegram destination. Receiver sends the result back to the chat/message from the original Telegram update.
-
-## Durable queue
-
-Runtime state lives in the dedicated `receiver-runtime` branch of this same repository.
-
-For every accepted update Receiver stores:
-
-- `runtime/inbox/<update_id>.json` — incoming Telegram update;
-- `runtime/outbox/<update_id>.json` — validated consumer action;
-- `runtime/receipts/<update_id>.json` — completed processing record.
-
-`runtime/state.json` contains the ordered pending event IDs.
-
-The queue is currently public because this repository is public. This is intentional for the current test stage and can be changed later.
-
-## Ordering
-
-Messages are processed strictly in increasing Telegram `update_id` order.
-
-```text
-111 -> consumer -> reply 111 -> receipt
-222 -> consumer -> reply 222 -> receipt
-333 -> consumer -> reply 333 -> receipt
-```
-
-A later update cannot obtain a separate runner and overtake an earlier update.
-
-## Recovery
-
-The runner-local filesystem is not authoritative.
-
-If a Receiver worker dies:
-
-1. the next worker reads `runtime/state.json`;
-2. unfinished inbox events are resumed in order;
-3. an existing outbox action is reused instead of running the consumer again;
-4. an existing receipt prevents a completed event from being processed again.
-
-There is one unavoidable narrow duplicate window: Telegram may accept `sendMessage` and the worker may die before the receipt is persisted.
+Receiver validates the action and derives the Telegram destination from the original update. For ordinary messages it uses Telegram `reply_parameters` so the answer is visibly bound to the source message.
 
 ## Continuous operation
 
 A Receiver worker runs for about 5.5 hours.
 
-It queues one successor before entering the long-poll loop. GitHub Actions concurrency allows only one Receiver worker to execute at a time. A watchdog requests a new worker if the chain disappears.
+Before entering the polling loop it queues one successor run. GitHub Actions concurrency allows only one Receiver worker to execute at a time. A watchdog periodically verifies that a live or queued Receiver run exists.
 
-## Consumer
+## Recovery model
 
-Current test consumer:
+Telegram remains the authoritative update queue.
+
+The Receiver advances its local offset only after successful processing of the current update. On the next `getUpdates` call that offset confirms already processed updates to Telegram.
+
+There is a narrow duplicate window if the worker dies after Telegram accepts `sendMessage` but before the next `getUpdates` call confirms the corresponding incoming update. The previous GitHub runtime queue was removed because it introduced unnecessary GitHub API operations into every message round-trip and caused unacceptable behavior in the interactive path.
+
+## Current consumer
 
 `lvlaksim1/telegram-receiver-test-consumer`
 
-Configuration:
+Current configuration:
 
 ```json
 {
-  "enabled": false,
+  "enabled": true,
   "consumer_repository": "lvlaksim1/telegram-receiver-test-consumer",
-  "runtime_branch": "receiver-runtime",
   "consumer_image": "python:3.12-slim",
   "consumer_script": "consumer.py",
   "consumer_timeout_seconds": 60,
@@ -124,16 +99,22 @@ Configuration:
 }
 ```
 
-The consumer repository is cloned once when a Receiver worker starts. Each event is executed inside a restricted Docker container with no network and no Receiver secrets.
-
 ## Control plane
 
 Owner-only Issue commands:
-
 - `[RECEIVER_START]`
 - `[RECEIVER_STOP]`
 - `[RECEIVER_STATUS]`
 - `[RECEIVER_HEALTHCHECK]`
+
+## Project context
+
+For a new chat or handoff, start with:
+
+1. `.context/ENTRYPOINT.md`
+2. `.context/handoffs/latest.md`
+
+These files are the Project Context Capsule and describe the authoritative architecture, current state, key decisions, known limitations and next work point.
 
 ## Local tests
 
