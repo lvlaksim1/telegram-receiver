@@ -12,13 +12,36 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@v7
+
       - name: Python version
         run: python3 --version
+
       - name: Compile
         run: python3 -m py_compile receiver.py tests/test_receiver.py
+
       - name: Unit tests
         run: python3 -m unittest discover -s tests -v
+
+      - name: Isolated consumer integration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CONSUMER_REPOSITORY="$(jq -r '.consumer_repository' receiver-config.json)"
+          CONSUMER_IMAGE="$(jq -r '.consumer_image' receiver-config.json)"
+          CONSUMER_SCRIPT="$(jq -r '.consumer_script' receiver-config.json)"
+
+          GIT_TERMINAL_PROMPT=0 git clone --depth=1             "https://github.com/$CONSUMER_REPOSITORY.git" consumer
+
+          docker pull "$CONSUMER_IMAGE"
+
+          RESPONSE="$(
+            printf '%s' '{"schema_version":1,"event_id":"42","update":{"update_id":42,"message":{"text":"hello"}}}' |
+              docker run                 --rm                 --network none                 --read-only                 --cap-drop ALL                 --security-opt no-new-privileges                 --user 65534:65534                 -e PYTHONDONTWRITEBYTECODE=1                 -i                 -v "$PWD/consumer:/consumer:ro"                 "$CONSUMER_IMAGE"                 python "/consumer/$CONSUMER_SCRIPT"
+          )"
+
+          jq -e             '.schema_version == 1 and .event_id == "42" and .action == "reply" and .text == "ответ: hello"'             <<< "$RESPONSE"
