@@ -1,5 +1,5 @@
 {
-  "enabled": true,
+  "enabled": false,
   "consumer_repository": "",
   "event_type": "telegram_update",
   "max_runtime_seconds": 19800,
