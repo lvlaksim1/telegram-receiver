@@ -720,23 +720,21 @@ def command_telegram_check(args: argparse.Namespace) -> int:
     return 0
 
 
-def command_telegram_probe(args: argparse.Namespace) -> int:
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    if not token:
-        raise ReceiverError("TELEGRAM_BOT_TOKEN is not configured")
-    client = TelegramClient(token)
-    webhook = client.get_webhook_info()
-    if str(webhook.get("url") or ""):
-        raise ReceiverError("Telegram webhook is active; getUpdates probe is unavailable")
-    updates = client.get_updates(
-        offset=None,
-        timeout=1,
-        allowed_updates=None,
-        limit=1,
-    )
-    first_update_id = updates[0].get("update_id") if updates else None
+def command_checkpoint_check(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    runtime_token = os.environ.get("RECEIVER_GITHUB_TOKEN", "").strip()
+    repository = os.environ.get("RECEIVER_REPOSITORY", "").strip()
+    branch = str(config.get("checkpoint_branch", "receiver-checkpoint")).strip()
+    path = str(config.get("checkpoint_path", CHECKPOINT_PATH)).strip()
+    if not runtime_token:
+        raise ReceiverError("RECEIVER_GITHUB_TOKEN is not configured")
+    if not repository or "/" not in repository:
+        raise ReceiverError("RECEIVER_REPOSITORY is not configured")
+    store = CheckpointStore(runtime_token, repository, branch, path)
+    data = store.load()
     print(
-        f"telegram_probe_ok pending_count={len(updates)} first_update_id={first_update_id}",
+        f"checkpoint_ok branch={branch} "
+        f"last_update_id={data.get('last_processed_update_id')}",
         flush=True,
     )
     return 0
@@ -759,7 +757,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("check")
     sub.add_parser("telegram-check")
-    sub.add_parser("telegram-probe")
+    sub.add_parser("checkpoint-check")
     sub.add_parser("run")
     return parser
 
@@ -772,8 +770,8 @@ def main() -> int:
             return command_check(args)
         if args.command == "telegram-check":
             return command_telegram_check(args)
-        if args.command == "telegram-probe":
-            return command_telegram_probe(args)
+        if args.command == "checkpoint-check":
+            return command_checkpoint_check(args)
         if args.command == "run":
             return command_run(args)
         raise ReceiverError(f"Unknown command: {args.command}")
