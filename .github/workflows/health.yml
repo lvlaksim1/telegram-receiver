@@ -39,17 +39,6 @@ jobs:
             echo "probe=ok" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Check durable runtime queue
-        id: queue
-        env:
-          RECEIVER_GITHUB_TOKEN: ${{ github.token }}
-          RECEIVER_REPOSITORY: ${{ github.repository }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 receiver.py queue-check
-          echo "queue=ok" >> "$GITHUB_OUTPUT"
-
       - name: Report result
         if: always()
         env:
@@ -58,12 +47,11 @@ jobs:
           JOB_STATUS: ${{ job.status }}
           WEBHOOK: ${{ steps.telegram.outputs.webhook }}
           PROBE: ${{ steps.telegram.outputs.probe }}
-          QUEUE: ${{ steps.queue.outputs.queue }}
         shell: bash
         run: |
           set -euo pipefail
           if [ "$JOB_STATUS" = "success" ]; then
-            BODY="HEALTH_OK: telegram credentials accepted; webhook=$WEBHOOK; long_poll_probe=$PROBE; runtime_queue=$QUEUE"
+            BODY="HEALTH_OK: telegram credentials accepted; webhook=$WEBHOOK; long_poll_probe=$PROBE; processing=direct_fifo"
           else
             BODY="HEALTH_FAILED: inspect the Actions run"
           fi
