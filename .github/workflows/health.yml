@@ -20,13 +20,13 @@ jobs:
       - name: Check Telegram credentials
         id: telegram
         env:
-          TELEGRAM_BOT_TOKEN: \${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: \${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         shell: bash
         run: |
           set -euo pipefail
-          test -n "\${TELEGRAM_BOT_TOKEN:-}"
-          test -n "\${TELEGRAM_CHAT_ID:-}"
+          test -n "${TELEGRAM_BOT_TOKEN:-}"
+          test -n "${TELEGRAM_CHAT_ID:-}"
           OUTPUT="$(python3 receiver.py telegram-check)"
           echo "$OUTPUT"
           if printf '%s' "$OUTPUT" | grep -q 'webhook_active=True'; then
@@ -42,8 +42,8 @@ jobs:
       - name: Check durable runtime queue
         id: queue
         env:
-          RECEIVER_GITHUB_TOKEN: \${{ github.token }}
-          RECEIVER_REPOSITORY: \${{ github.repository }}
+          RECEIVER_GITHUB_TOKEN: ${{ github.token }}
+          RECEIVER_REPOSITORY: ${{ github.repository }}
         shell: bash
         run: |
           set -euo pipefail
@@ -53,12 +53,12 @@ jobs:
       - name: Report result
         if: always()
         env:
-          GH_TOKEN: \${{ github.token }}
-          ISSUE_NUMBER: \${{ github.event.issue.number }}
-          JOB_STATUS: \${{ job.status }}
-          WEBHOOK: \${{ steps.telegram.outputs.webhook }}
-          PROBE: \${{ steps.telegram.outputs.probe }}
-          QUEUE: \${{ steps.queue.outputs.queue }}
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          JOB_STATUS: ${{ job.status }}
+          WEBHOOK: ${{ steps.telegram.outputs.webhook }}
+          PROBE: ${{ steps.telegram.outputs.probe }}
+          QUEUE: ${{ steps.queue.outputs.queue }}
         shell: bash
         run: |
           set -euo pipefail
@@ -68,5 +68,5 @@ jobs:
             BODY="HEALTH_FAILED: inspect the Actions run"
           fi
           gh api --method POST \
-            "repos/\${GITHUB_REPOSITORY}/issues/\${ISSUE_NUMBER}/comments" \
+            "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" \
             -f body="$BODY"
