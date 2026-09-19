@@ -12,10 +12,12 @@
 When continuing this project in a new chat:
 
 1. read this file;
-2. read `.context/handoffs/latest.md`;
-3. read `.context/current/state.md`;
-4. read relevant records in `.context/decisions/`;
-5. verify current `main`, active Receiver workflow and CI before editing.
+2. read `.context/manifest.json`;
+3. read `.context/handoffs/latest.md`;
+4. read `.context/current/state.md`;
+5. read `.context/protocol.md` and `.context/rules/project.md`;
+6. read relevant records in `.context/decisions/`;
+7. verify current `main`, active Receiver workflow and CI before editing.
 
 ## Current architecture
 
