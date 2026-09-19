@@ -9,12 +9,14 @@ stdin/stdout JSON.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -23,6 +25,7 @@ from typing import Any, Optional
 
 API_VERSION = "2022-11-28"
 DEFAULT_CONFIG_PATH = "receiver-config.json"
+CHECKPOINT_PATH = "state/checkpoint.json"
 
 
 class ReceiverError(RuntimeError):
@@ -224,6 +227,88 @@ class TelegramClient:
         if not isinstance(result, dict):
             raise ReceiverError("Telegram sendMessage returned an invalid result")
         return result
+
+
+@dataclass
+class CheckpointStore:
+    token: str
+    repository: str
+    branch: str
+    path: str = CHECKPOINT_PATH
+    sha: Optional[str] = None
+
+    @property
+    def headers(self) -> dict[str, str]:
+        return {
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {self.token}",
+            "X-GitHub-Api-Version": API_VERSION,
+        }
+
+    def _contents_url(self) -> str:
+        encoded = urllib.parse.quote(self.path, safe="/")
+        return f"https://api.github.com/repos/{self.repository}/contents/{encoded}"
+
+    def load(self) -> dict[str, Any]:
+        query = urllib.parse.urlencode({"ref": self.branch})
+        _, response = http_json(
+            "GET",
+            f"{self._contents_url()}?{query}",
+            headers=self.headers,
+            expected=(200,),
+        )
+        if not isinstance(response, dict):
+            raise ReceiverError("Invalid checkpoint response")
+        encoded = response.get("content")
+        if not isinstance(encoded, str):
+            raise ReceiverError("Checkpoint content is missing")
+        try:
+            data = json.loads(base64.b64decode(encoded).decode("utf-8"))
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ReceiverError("Checkpoint is invalid JSON") from exc
+        if not isinstance(data, dict) or data.get("schema_version") != 1:
+            raise ReceiverError("Checkpoint has invalid schema")
+        last_id = data.get("last_processed_update_id")
+        if last_id is not None and not isinstance(last_id, int):
+            raise ReceiverError("Checkpoint last_processed_update_id must be integer or null")
+        self.sha = str(response.get("sha") or "") or None
+        return data
+
+    def save(
+        self,
+        *,
+        update_id: int,
+        action: str,
+        telegram_message_id: Optional[int],
+    ) -> None:
+        data = {
+            "schema_version": 1,
+            "last_processed_update_id": update_id,
+            "last_action": action,
+            "telegram_message_id": telegram_message_id,
+            "updated_at": utc_now(),
+        }
+        content = json.dumps(data, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+        body: dict[str, Any] = {
+            "message": f"Checkpoint Telegram update {update_id}",
+            "content": base64.b64encode(content.encode("utf-8")).decode("ascii"),
+            "branch": self.branch,
+        }
+        if self.sha:
+            body["sha"] = self.sha
+        _, response = http_json(
+            "PUT",
+            self._contents_url(),
+            headers=self.headers,
+            body=body,
+            expected=(200, 201),
+        )
+        if not isinstance(response, dict):
+            raise ReceiverError("Invalid checkpoint write response")
+        content_meta = response.get("content")
+        if not isinstance(content_meta, dict) or not content_meta.get("sha"):
+            raise ReceiverError("Checkpoint write did not return content SHA")
+        self.sha = str(content_meta["sha"])
 
 
 @dataclass
