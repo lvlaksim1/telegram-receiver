@@ -1,5 +1,5 @@
 {
-  "enabled": true,
+  "enabled": false,
   "consumer_repository": "lvlaksim1/telegram-receiver-test-consumer",
   "runtime_branch": "receiver-runtime",
   "consumer_image": "python:3.12-slim",
