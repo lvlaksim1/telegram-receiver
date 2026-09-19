@@ -1,5 +1,5 @@
 {
-  "enabled": false,
+  "enabled": true,
   "consumer_repository": "lvlaksim1/telegram-receiver-test-consumer",
   "event_type": "telegram_update",
   "max_runtime_seconds": 19800,
