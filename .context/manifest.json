@@ -11,11 +11,13 @@
     ".context/rules/project.md"
   ],
   "decisions": [
-    ".context/decisions/2026-09-19-direct-fifo.md"
+    ".context/decisions/2026-09-19-direct-fifo.md",
+    ".context/decisions/2026-09-20-checkpoint-recovery.md"
   ],
   "dialogues": [
-    ".context/dialogues/2026-09-19.md"
+    ".context/dialogues/2026-09-19.md",
+    ".context/dialogues/2026-09-20.md"
   ],
   "deprecated_runtime_branch": "receiver-runtime",
-  "updated_at": "2026-09-19"
+  "updated_at": "2026-09-20"
 }
