@@ -60,6 +60,8 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RECEIVER_GITHUB_TOKEN: ${{ github.token }}
+          RECEIVER_REPOSITORY: ${{ github.repository }}
           CONSUMER_DIR: ${{ github.workspace }}/consumer
         run: python3 receiver.py check
 
@@ -78,6 +80,8 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RECEIVER_GITHUB_TOKEN: ${{ github.token }}
+          RECEIVER_REPOSITORY: ${{ github.repository }}
           CONSUMER_DIR: ${{ github.workspace }}/consumer
         run: python3 receiver.py run
 
