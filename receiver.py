@@ -9,14 +9,12 @@ stdin/stdout JSON.
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import os
 import subprocess
 import sys
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -25,7 +23,6 @@ from typing import Any, Optional
 
 API_VERSION = "2022-11-28"
 DEFAULT_CONFIG_PATH = "receiver-config.json"
-STATE_PATH = "runtime/state.json"
 
 
 class ReceiverError(RuntimeError):
@@ -225,202 +222,6 @@ class TelegramClient:
         if not isinstance(result, dict):
             raise ReceiverError("Telegram sendMessage returned an invalid result")
         return result
-
-
-@dataclass
-class GitHubRuntimeStore:
-    token: str
-    repository: str
-    branch: str
-
-    @property
-    def headers(self) -> dict[str, str]:
-        return {
-            "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {self.token}",
-            "X-GitHub-Api-Version": API_VERSION,
-        }
-
-    def check_branch(self) -> None:
-        branch = urllib.parse.quote(self.branch, safe="")
-        http_json(
-            "GET",
-            f"https://api.github.com/repos/{self.repository}/branches/{branch}",
-            headers=self.headers,
-            expected=(200,),
-        )
-
-    def _contents_url(self, path: str) -> str:
-        encoded = urllib.parse.quote(path, safe="/")
-        return f"https://api.github.com/repos/{self.repository}/contents/{encoded}"
-
-    def get_json(self, path: str) -> Optional[dict[str, Any]]:
-        query = urllib.parse.urlencode({"ref": self.branch})
-        status, response = http_json(
-            "GET",
-            f"{self._contents_url(path)}?{query}",
-            headers=self.headers,
-            expected=(200, 404),
-        )
-        if status == 404:
-            return None
-        if not isinstance(response, dict):
-            raise ReceiverError(f"Invalid GitHub contents response for {path}")
-        encoded = response.get("content")
-        if not isinstance(encoded, str):
-            raise ReceiverError(f"Missing content for {path}")
-        try:
-            raw = base64.b64decode(encoded).decode("utf-8")
-            data = json.loads(raw)
-        except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ReceiverError(f"Invalid JSON runtime file: {path}") from exc
-        if not isinstance(data, dict):
-            raise ReceiverError(f"Runtime file must contain a JSON object: {path}")
-        data["_github_sha"] = response.get("sha")
-        return data
-
-    def put_json(
-        self,
-        path: str,
-        data: dict[str, Any],
-        *,
-        message: str,
-        immutable: bool = False,
-    ) -> bool:
-        existing = self.get_json(path)
-        existing_sha: Optional[str] = None
-        if existing is not None:
-            existing_sha = str(existing.pop("_github_sha", "") or "")
-            if existing == data:
-                return False
-            if immutable:
-                raise ReceiverError(f"Immutable runtime object already differs: {path}")
-
-        content = json.dumps(data, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
-        body: dict[str, Any] = {
-            "message": message,
-            "content": base64.b64encode(content.encode("utf-8")).decode("ascii"),
-            "branch": self.branch,
-        }
-        if existing_sha:
-            body["sha"] = existing_sha
-
-        http_json(
-            "PUT",
-            self._contents_url(path),
-            headers=self.headers,
-            body=body,
-            expected=(200, 201),
-        )
-        return True
-
-    def load_state(self) -> dict[str, Any]:
-        state = self.get_json(STATE_PATH)
-        if state is None:
-            state = {"schema_version": 1, "pending": [], "updated_at": utc_now()}
-            self.put_json(STATE_PATH, state, message="Initialize receiver runtime state")
-            return state
-        state.pop("_github_sha", None)
-        pending = state.get("pending")
-        if state.get("schema_version") != 1 or not isinstance(pending, list):
-            raise ReceiverError("Invalid runtime state")
-        return state
-
-    def save_state(self, state: dict[str, Any]) -> None:
-        clean = dict(state)
-        clean.pop("_github_sha", None)
-        clean["updated_at"] = utc_now()
-        self.put_json(STATE_PATH, clean, message="Update receiver runtime state")
-
-    def enqueue(self, update: dict[str, Any]) -> str:
-        update_id = update.get("update_id")
-        if not isinstance(update_id, int):
-            raise ReceiverError("Telegram update is missing integer update_id")
-        event_id = str(update_id)
-
-        if self.get_json(f"runtime/receipts/{event_id}.json") is not None:
-            return "completed"
-
-        inbox_path = f"runtime/inbox/{event_id}.json"
-        existing_inbox = self.get_json(inbox_path)
-        if existing_inbox is None:
-            self.put_json(
-                inbox_path,
-                {
-                    "schema_version": 1,
-                    "event_id": event_id,
-                    "received_at": utc_now(),
-                    "update": update,
-                },
-                message=f"Queue Telegram update {event_id}",
-                immutable=True,
-            )
-        else:
-            existing_inbox.pop("_github_sha", None)
-            if (
-                str(existing_inbox.get("event_id") or "") != event_id
-                or existing_inbox.get("update") != update
-            ):
-                raise ReceiverError(f"Stored inbox object differs for event {event_id}")
-
-        state = self.load_state()
-        pending = [str(item) for item in state["pending"]]
-        if event_id not in pending:
-            pending.append(event_id)
-            pending.sort(key=int)
-            state["pending"] = pending
-            self.save_state(state)
-        return "queued"
-
-    def next_pending(self) -> Optional[str]:
-        state = self.load_state()
-        pending = [str(item) for item in state["pending"]]
-        if not pending:
-            return None
-        pending.sort(key=int)
-        return pending[0]
-
-    def complete(self, event_id: str) -> None:
-        state = self.load_state()
-        pending = [str(item) for item in state["pending"] if str(item) != event_id]
-        if pending != state["pending"]:
-            state["pending"] = pending
-            self.save_state(state)
-
-    def get_inbox(self, event_id: str) -> dict[str, Any]:
-        data = self.get_json(f"runtime/inbox/{event_id}.json")
-        if data is None:
-            raise ReceiverError(f"Missing inbox object for event {event_id}")
-        data.pop("_github_sha", None)
-        return data
-
-    def get_outbox(self, event_id: str) -> Optional[dict[str, Any]]:
-        data = self.get_json(f"runtime/outbox/{event_id}.json")
-        if data is not None:
-            data.pop("_github_sha", None)
-        return data
-
-    def get_receipt(self, event_id: str) -> Optional[dict[str, Any]]:
-        data = self.get_json(f"runtime/receipts/{event_id}.json")
-        if data is not None:
-            data.pop("_github_sha", None)
-        return data
-
-    def save_outbox(self, event_id: str, action: dict[str, Any]) -> None:
-        self.put_json(
-            f"runtime/outbox/{event_id}.json",
-            action,
-            message=f"Store consumer action {event_id}",
-            immutable=True,
-        )
-
-    def save_receipt(self, event_id: str, receipt: dict[str, Any]) -> None:
-        self.put_json(
-            f"runtime/receipts/{event_id}.json",
-            receipt,
-            message=f"Complete Telegram event {event_id}",
-            immutable=True,
-        )
 
 
 @dataclass
@@ -748,22 +549,6 @@ def command_telegram_probe(args: argparse.Namespace) -> int:
     return 0
 
 
-def command_queue_check(args: argparse.Namespace) -> int:
-    config = load_config(args.config)
-    runtime_token = os.environ.get("RECEIVER_GITHUB_TOKEN", "").strip()
-    repository = os.environ.get("RECEIVER_REPOSITORY", "").strip()
-    branch = str(config.get("runtime_branch", "receiver-runtime")).strip()
-    if not runtime_token:
-        raise ReceiverError("RECEIVER_GITHUB_TOKEN is not configured")
-    if not repository or "/" not in repository:
-        raise ReceiverError("RECEIVER_REPOSITORY is not configured")
-    store = GitHubRuntimeStore(runtime_token, repository, branch)
-    store.check_branch()
-    state = store.load_state()
-    print(f"queue_ok branch={branch} pending={len(state['pending'])}", flush=True)
-    return 0
-
-
 def command_run(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     if config.get("enabled") is not True:
@@ -782,7 +567,6 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("check")
     sub.add_parser("telegram-check")
     sub.add_parser("telegram-probe")
-    sub.add_parser("queue-check")
     sub.add_parser("run")
     return parser
 
@@ -797,8 +581,6 @@ def main() -> int:
             return command_telegram_check(args)
         if args.command == "telegram-probe":
             return command_telegram_probe(args)
-        if args.command == "queue-check":
-            return command_queue_check(args)
         if args.command == "run":
             return command_run(args)
         raise ReceiverError(f"Unknown command: {args.command}")
