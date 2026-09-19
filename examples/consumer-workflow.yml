@@ -1,0 +1,30 @@
+name: Telegram Update Consumer
+
+on:
+  repository_dispatch:
+    types:
+      - telegram_update
+
+permissions:
+  contents: read
+
+jobs:
+  handle:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Show delivery metadata
+        env:
+          UPDATE_ID: ${{ github.event.client_payload.update_id }}
+          CHAT_ID: ${{ github.event.client_payload.chat_id }}
+        run: |
+          echo "Telegram update received"
+          echo "update_id=$UPDATE_ID"
+          echo "chat_id=$CHAT_ID"
+
+      # The full Telegram Update object is available as:
+      # github.event.client_payload.update
+      #
+      # IMPORTANT:
+      # Receiver delivery is at-least-once. Persist update_id in the consumer
+      # if processing the same Telegram update more than once would be harmful.
