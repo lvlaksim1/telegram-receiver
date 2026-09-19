@@ -1,22 +1,48 @@
 # Current State
 
-Updated: 2026-09-19
+Updated: 2026-09-20
 
 ## Status
 
-The Receiver is operational on the direct FIFO architecture.
+The Receiver uses the accepted direct FIFO architecture with a lightweight persistent post-reply checkpoint.
 
-Validated live before cleanup:
+Validated live before the reliability hardening:
 - single message `TEST_D` received an immediate reply without requiring a second inbound message;
 - burst `1 2 3 4 5` produced replies in correct order.
 
 ## Current message path
 
 ```text
-getUpdates -> filter/validate -> isolated consumer -> validate action -> sendMessage
+getUpdates
+  -> filter/validate
+  -> isolated consumer
+  -> validate action
+  -> sendMessage
+  -> persistent checkpoint
 ```
 
-No repository storage operation occurs between receiving an update and sending its reply.
+The user-visible reply path ends at `sendMessage`. GitHub checkpoint persistence occurs only afterward.
+
+## Persistent recovery state
+
+Authoritative recovery checkpoint:
+- branch: `receiver-checkpoint`
+- file: `state/checkpoint.json`
+
+It stores the last completed Telegram `update_id` and is loaded at worker startup. Receiver resumes from `last_processed_update_id + 1`.
+
+If checkpoint persistence temporarily fails, Receiver retries the checkpoint without re-running the consumer or re-sending the Telegram reply.
+
+## Health behavior
+
+The health workflow does **not** call `getUpdates`.
+
+It checks:
+- Telegram credentials and webhook state;
+- checkpoint readability;
+- presence of a live or queued Receiver workflow run.
+
+The persistent Receiver remains the only Telegram update consumer.
 
 ## Security boundary
 
@@ -31,20 +57,32 @@ No repository storage operation occurs between receiving an update and sending i
 - GitHub Actions concurrency serializes workers;
 - watchdog recovers a missing worker chain.
 
+## Regression coverage
+
+CI covers:
+- checkpoint-to-offset restoration;
+- FIFO processing;
+- replay deduplication from checkpoint;
+- failed current update cannot be overtaken;
+- checkpoint retry does not resend the Telegram reply;
+- consumer contract and Telegram reply binding.
+
 ## Known limitation
 
-A narrow duplicate-reply window remains if:
+A narrow duplicate-reply window remains only if:
 1. Telegram accepts `sendMessage`;
-2. the worker dies before the next `getUpdates(offset=...)` confirms the incoming update.
+2. the process dies before the post-reply checkpoint is persisted.
 
-Do not solve this by restoring GitHub repository writes to the interactive hot path without a new design review.
+Do not solve this by moving GitHub persistence back in front of `sendMessage` without a new design review.
 
 ## Deprecated runtime state
 
-The `receiver-runtime` branch and its `runtime/inbox`, `outbox`, `receipts`, and `state.json` files are historical evidence. They are no longer authoritative runtime state.
+The old `receiver-runtime` branch and its inbox/outbox/receipts/state files are historical evidence only. They are not authoritative runtime state.
 
-## Cleanup status
+## Active baseline
 
-Temporary direct Telegram diagnostic workflows were removed.
-README and architecture documentation were updated for direct FIFO.
-Telegram `reply_parameters` binding was restored after the ordering fix; unit coverage verifies the payload. Live post-cleanup verification is the next small check.
+- direct FIFO hot path;
+- post-reply persistent checkpoint;
+- non-consuming health check;
+- one active Receiver update consumer;
+- isolated consumer repository.
