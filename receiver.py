@@ -422,28 +422,42 @@ class Runtime:
     config: dict[str, Any]
     telegram: TelegramClient
     consumer: ConsumerRunner
+    checkpoint: CheckpointStore
     allowed_chat_id: Optional[str]
+    checkpoint_data: Optional[dict[str, Any]] = None
 
     @classmethod
     def from_environment(cls, config_path: str) -> "Runtime":
         config = load_config(config_path)
 
         telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+        runtime_token = os.environ.get("RECEIVER_GITHUB_TOKEN", "").strip()
+        repository = os.environ.get("RECEIVER_REPOSITORY", "").strip()
         allowed_chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip() or None
         consumer_dir = os.environ.get("CONSUMER_DIR", "").strip()
 
         consumer_image = str(config.get("consumer_image", "python:3.12-slim")).strip()
         consumer_script = str(config.get("consumer_script", "consumer.py")).strip()
         consumer_timeout = int(config.get("consumer_timeout_seconds", 60))
+        checkpoint_branch = str(config.get("checkpoint_branch", "receiver-checkpoint")).strip()
+        checkpoint_path = str(config.get("checkpoint_path", CHECKPOINT_PATH)).strip()
 
         if not telegram_token:
             raise ReceiverError("TELEGRAM_BOT_TOKEN is not configured")
+        if not runtime_token:
+            raise ReceiverError("RECEIVER_GITHUB_TOKEN is not configured")
+        if not repository or "/" not in repository:
+            raise ReceiverError("RECEIVER_REPOSITORY is not configured")
         if not consumer_dir:
             raise ReceiverError("CONSUMER_DIR is not configured")
         if not consumer_image:
             raise ReceiverError("consumer_image must not be empty")
         if not consumer_script:
             raise ReceiverError("consumer_script must not be empty")
+        if not checkpoint_branch:
+            raise ReceiverError("checkpoint_branch must not be empty")
+        if not checkpoint_path:
+            raise ReceiverError("checkpoint_path must not be empty")
 
         return cls(
             config=config,
@@ -453,6 +467,12 @@ class Runtime:
                 image=consumer_image,
                 script=consumer_script,
                 timeout_seconds=consumer_timeout,
+            ),
+            checkpoint=CheckpointStore(
+                token=runtime_token,
+                repository=repository,
+                branch=checkpoint_branch,
+                path=checkpoint_path,
             ),
             allowed_chat_id=allowed_chat_id,
         )
@@ -465,9 +485,23 @@ class Runtime:
                 "Telegram webhook is active. getUpdates cannot be used until the webhook is removed."
             )
         self.consumer.check()
-        print("preflight_ok processing=direct_fifo consumer_isolated=true", flush=True)
+        self.checkpoint_data = self.checkpoint.load()
+        last_id = self.checkpoint_data.get("last_processed_update_id")
+        print(
+            f"preflight_ok processing=direct_fifo consumer_isolated=true "
+            f"checkpoint_last_update_id={last_id}",
+            flush=True,
+        )
 
-    def process_update(self, update: dict[str, Any]) -> str:
+    def initial_offset(self) -> Optional[int]:
+        data = self.checkpoint_data
+        if data is None:
+            data = self.checkpoint.load()
+            self.checkpoint_data = data
+        last_id = data.get("last_processed_update_id")
+        return last_id + 1 if isinstance(last_id, int) else None
+
+    def process_update(self, update: dict[str, Any]) -> dict[str, Any]:
         update_id = update.get("update_id")
         if not isinstance(update_id, int):
             raise ReceiverError("Telegram update is missing integer update_id")
@@ -493,12 +527,14 @@ class Runtime:
                 f"consumer_ms={consumer_ms} total_ms={total_ms}",
                 flush=True,
             )
-            return "no_reply"
+            return {"action": "no_reply", "telegram_message_id": None}
 
         send_started = time.monotonic()
         sent = self.telegram.send_reply(update, action["text"])
         send_ms = round((time.monotonic() - send_started) * 1000)
         sent_message_id = sent.get("message_id")
+        if sent_message_id is not None and not isinstance(sent_message_id, int):
+            raise ReceiverError("Telegram sendMessage returned invalid message_id")
         total_ms = round((time.monotonic() - started) * 1000)
 
         print(
@@ -507,7 +543,87 @@ class Runtime:
             f"send_ms={send_ms} total_ms={total_ms}",
             flush=True,
         )
-        return "reply"
+        return {"action": "reply", "telegram_message_id": sent_message_id}
+
+    def persist_checkpoint(
+        self,
+        *,
+        update_id: int,
+        action: str,
+        telegram_message_id: Optional[int],
+        retry_max: int,
+    ) -> None:
+        delay = 1
+        while True:
+            try:
+                self.checkpoint.save(
+                    update_id=update_id,
+                    action=action,
+                    telegram_message_id=telegram_message_id,
+                )
+                if self.checkpoint_data is None:
+                    self.checkpoint_data = {}
+                self.checkpoint_data.update(
+                    {
+                        "schema_version": 1,
+                        "last_processed_update_id": update_id,
+                        "last_action": action,
+                        "telegram_message_id": telegram_message_id,
+                        "updated_at": utc_now(),
+                    }
+                )
+                print(f"checkpoint_saved update_id={update_id}", flush=True)
+                return
+            except ReceiverError as exc:
+                print(
+                    f"checkpoint_retry update_id={update_id} error={exc} retry_in={delay}s",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                time.sleep(delay)
+                delay = min(delay * 2, retry_max)
+
+    def handle_update(
+        self,
+        update: dict[str, Any],
+        *,
+        last_processed_update_id: Optional[int],
+        retry_max: int,
+    ) -> tuple[Optional[int], int, int]:
+        update_id = update.get("update_id")
+        if not isinstance(update_id, int):
+            return last_processed_update_id, 0, 0
+
+        if (
+            last_processed_update_id is not None
+            and update_id <= last_processed_update_id
+        ):
+            print(f"update_deduplicated update_id={update_id}", flush=True)
+            return last_processed_update_id, 0, 0
+
+        chat_id = extract_chat_id(update)
+        if (
+            self.allowed_chat_id is not None
+            and chat_id is not None
+            and chat_id != self.allowed_chat_id
+        ):
+            self.persist_checkpoint(
+                update_id=update_id,
+                action="filtered",
+                telegram_message_id=None,
+                retry_max=retry_max,
+            )
+            print(f"update_filtered update_id={update_id} chat_match=false", flush=True)
+            return update_id, 0, 1
+
+        result = self.process_update(update)
+        self.persist_checkpoint(
+            update_id=update_id,
+            action=str(result["action"]),
+            telegram_message_id=result.get("telegram_message_id"),
+            retry_max=retry_max,
+        )
+        return update_id, 1, 0
 
     def run(self) -> None:
         max_runtime = int(self.config.get("max_runtime_seconds", 19800))
@@ -518,13 +634,15 @@ class Runtime:
             raise ReceiverError("allowed_updates must be an array or null")
 
         deadline = time.monotonic() + max_runtime
-        offset: Optional[int] = None
+        offset = self.initial_offset()
+        last_processed_update_id = offset - 1 if isinstance(offset, int) else None
         backoff = 1
         processed = 0
         filtered = 0
 
         print(
-            f"receiver_started processing=direct_fifo max_runtime={max_runtime}s",
+            f"receiver_started processing=direct_fifo max_runtime={max_runtime}s "
+            f"initial_offset={offset}",
             flush=True,
         )
 
@@ -544,27 +662,15 @@ class Runtime:
                 )
 
                 for update in updates:
-                    update_id = update.get("update_id")
-                    if not isinstance(update_id, int):
-                        continue
-
-                    chat_id = extract_chat_id(update)
-                    if (
-                        self.allowed_chat_id is not None
-                        and chat_id is not None
-                        and chat_id != self.allowed_chat_id
-                    ):
-                        filtered += 1
-                        offset = update_id + 1
-                        print(
-                            f"update_filtered update_id={update_id} chat_match=false",
-                            flush=True,
-                        )
-                        continue
-
-                    self.process_update(update)
-                    processed += 1
-                    offset = update_id + 1
+                    last_processed_update_id, processed_delta, filtered_delta = self.handle_update(
+                        update,
+                        last_processed_update_id=last_processed_update_id,
+                        retry_max=retry_max,
+                    )
+                    processed += processed_delta
+                    filtered += filtered_delta
+                    if isinstance(last_processed_update_id, int):
+                        offset = last_processed_update_id + 1
 
             except ReceiverError as exc:
                 print(f"receiver_retry error={exc} retry_in={backoff}s", file=sys.stderr, flush=True)
