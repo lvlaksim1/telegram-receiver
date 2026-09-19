@@ -73,11 +73,23 @@ Before entering the polling loop it queues one successor run. GitHub Actions con
 
 ## Recovery model
 
-Telegram remains the authoritative update queue.
+Telegram remains the authoritative inbound queue, while a lightweight persistent checkpoint is stored in the dedicated `receiver-checkpoint` branch:
 
-The Receiver advances its local offset only after successful processing of the current update. On the next `getUpdates` call that offset confirms already processed updates to Telegram.
+```text
+state/checkpoint.json
+```
 
-There is a narrow duplicate window if the worker dies after Telegram accepts `sendMessage` but before the next `getUpdates` call confirms the corresponding incoming update. The previous GitHub runtime queue was removed because it introduced unnecessary GitHub API operations into every message round-trip and caused unacceptable behavior in the interactive path.
+The checkpoint contains the last completed Telegram `update_id` and is loaded when a worker starts. The next worker therefore starts from `last_processed_update_id + 1` instead of `offset=None`.
+
+The checkpoint write happens only **after** consumer processing and Telegram `sendMessage` have completed:
+
+```text
+getUpdates -> consumer -> sendMessage -> checkpoint
+```
+
+If a checkpoint write temporarily fails, Receiver retries the checkpoint without running the consumer or sending the Telegram reply again. This keeps GitHub persistence out of the reply hot path.
+
+A narrow crash window still exists if the process dies after Telegram accepts `sendMessage` but before the checkpoint is persisted. Telegram Bot API does not provide a Receiver-controlled idempotency key for `sendMessage`, so this residual duplicate window is documented rather than hidden.
 
 ## Current consumer
 
@@ -92,6 +104,8 @@ Current configuration:
   "consumer_image": "python:3.12-slim",
   "consumer_script": "consumer.py",
   "consumer_timeout_seconds": 60,
+  "checkpoint_branch": "receiver-checkpoint",
+  "checkpoint_path": "state/checkpoint.json",
   "max_runtime_seconds": 19800,
   "long_poll_timeout_seconds": 50,
   "retry_max_seconds": 30,
@@ -106,6 +120,8 @@ Owner-only Issue commands:
 - `[RECEIVER_STOP]`
 - `[RECEIVER_STATUS]`
 - `[RECEIVER_HEALTHCHECK]`
+
+The health check never calls `getUpdates`. It checks Telegram credentials/webhook state, the persistent checkpoint and the presence of a live or queued Receiver worker, so it cannot compete with the Receiver for updates.
 
 ## Project context
 
