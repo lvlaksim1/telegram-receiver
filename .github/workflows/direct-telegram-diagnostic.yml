@@ -1,0 +1,74 @@
+name: Direct Telegram Diagnostic
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  diagnose:
+    if: github.event.issue.user.login == 'lvlaksim1' && github.event.issue.title == '[DIRECT_TELEGRAM_DIAGNOSTIC]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Send direct diagnostic
+        id: send
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          import urllib.request
+
+          payload = json.dumps({
+              "chat_id": os.environ["TELEGRAM_CHAT_ID"],
+              "text": "DIRECT_DIAGNOSTIC_20260919_2206"
+          }).encode("utf-8")
+
+          req = urllib.request.Request(
+              f"https://api.telegram.org/bot{os.environ['TELEGRAM_BOT_TOKEN']}/sendMessage",
+              data=payload,
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+
+          with urllib.request.urlopen(req, timeout=30) as response:
+              data = json.loads(response.read().decode("utf-8"))
+
+          if data.get("ok") is not True:
+              raise SystemExit("Telegram sendMessage failed")
+
+          result = data["result"]
+          sender = result.get("from") or {}
+          chat = result.get("chat") or {}
+
+          print(f"message_id={result.get('message_id')}")
+          print(f"date={result.get('date')}")
+          print(f"bot_id={sender.get('id')}")
+          print(f"bot_username={sender.get('username')}")
+          print(f"chat_id={chat.get('id')}")
+          print(f"chat_type={chat.get('type')}")
+          PY
+
+      - name: Report metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          MESSAGE_ID: ${{ steps.send.outputs.message_id }}
+          DATE: ${{ steps.send.outputs.date }}
+          BOT_ID: ${{ steps.send.outputs.bot_id }}
+          BOT_USERNAME: ${{ steps.send.outputs.bot_username }}
+          CHAT_ID: ${{ steps.send.outputs.chat_id }}
+          CHAT_TYPE: ${{ steps.send.outputs.chat_type }}
+        shell: bash
+        run: |
+          BODY="DIRECT_OK message_id=$MESSAGE_ID date=$DATE bot=$BOT_USERNAME/$BOT_ID chat_id=$CHAT_ID chat_type=$CHAT_TYPE"
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -f body="$BODY"
