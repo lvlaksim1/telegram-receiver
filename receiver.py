@@ -394,6 +394,26 @@ def command_telegram_probe(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_dispatch_probe(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    dispatch_token = os.environ.get("CONSUMER_DISPATCH_TOKEN", "").strip()
+    repository = str(config.get("consumer_repository", "")).strip()
+    event_type = str(config.get("event_type", "telegram_update")).strip()
+
+    if not dispatch_token:
+        raise ReceiverError("CONSUMER_DISPATCH_TOKEN is not configured")
+    if not repository or "/" not in repository:
+        raise ReceiverError("consumer_repository is not configured")
+    if not event_type:
+        raise ReceiverError("event_type must not be empty")
+
+    client = GitHubDispatchClient(dispatch_token, repository, event_type)
+    client.check_repository()
+    client.dispatch({"update_id": -1})
+    print(f"dispatch_probe_ok consumer={repository}", flush=True)
+    return 0
+
+
 def command_run(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     if config.get("enabled") is not True:
@@ -412,6 +432,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("check")
     sub.add_parser("telegram-check")
     sub.add_parser("telegram-probe")
+    sub.add_parser("dispatch-probe")
     sub.add_parser("run")
     return parser
 
@@ -426,6 +447,8 @@ def main() -> int:
             return command_telegram_check(args)
         if args.command == "telegram-probe":
             return command_telegram_probe(args)
+        if args.command == "dispatch-probe":
+            return command_dispatch_probe(args)
         if args.command == "run":
             return command_run(args)
         raise ReceiverError(f"Unknown command: {args.command}")
