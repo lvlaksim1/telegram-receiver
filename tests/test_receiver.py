@@ -41,6 +41,33 @@ class MessageContextTests(unittest.TestCase):
         self.assertEqual(receiver.extract_message_context({"poll": {}}), (None, None, None))
 
 
+class TelegramClientTests(unittest.TestCase):
+    def test_send_reply_does_not_use_reply_parameters(self):
+        client = receiver.TelegramClient("token")
+        with patch.object(
+            client,
+            "call",
+            return_value={"message_id": 99, "chat": {"id": 123, "type": "private"}},
+        ) as mocked_call:
+            result = client.send_reply(
+                {
+                    "message": {
+                        "message_id": 9,
+                        "chat": {"id": 123},
+                        "text": "hello",
+                    }
+                },
+                "answer",
+            )
+
+        self.assertEqual(result["message_id"], 99)
+        method, payload = mocked_call.call_args.args
+        self.assertEqual(method, "sendMessage")
+        self.assertEqual(payload["chat_id"], 123)
+        self.assertEqual(payload["text"], "answer")
+        self.assertNotIn("reply_parameters", payload)
+
+
 class ConfigTests(unittest.TestCase):
     def test_load_config(self):
         with tempfile.TemporaryDirectory() as directory:
