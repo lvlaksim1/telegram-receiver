@@ -20,6 +20,8 @@ GitHub Actions provides the long-lived worker runtime and control plane. GitHub 
 6. Receiver sends the consumer result only to the chat/message derived from the original Telegram update.
 7. Raw message bodies are not written to ordinary operational logs.
 8. No GitHub API read/write is required between receipt of an update and `sendMessage`.
+9. A lightweight persistent checkpoint is written only after an update has completed.
+10. Health checks never call `getUpdates`; the Receiver is the only Telegram update consumer.
 
 ## Event lifecycle
 
@@ -35,6 +37,8 @@ run consumer N in isolated container
 validate consumer action
   ↓
 Receiver calls sendMessage if requested
+  ↓
+persist checkpoint for N
   ↓
 advance local offset to N+1
   ↓
@@ -64,6 +68,32 @@ Validation after the change:
 - a burst `1 2 3 4 5` produced replies in the same order.
 
 The old `receiver-runtime` branch is historical evidence only and is not authoritative runtime state.
+
+## Persistent checkpoint
+
+The active recovery state is stored in the dedicated `receiver-checkpoint` branch at:
+
+```text
+state/checkpoint.json
+```
+
+It records:
+- `last_processed_update_id`;
+- the final action type;
+- the Telegram message ID when a reply was sent;
+- update time.
+
+The worker loads this checkpoint at startup and starts polling from `last_processed_update_id + 1`.
+
+Checkpoint persistence is deliberately **after** `sendMessage`. This preserves the interactive hot path:
+
+```text
+getUpdates -> consumer -> sendMessage
+```
+
+A failed checkpoint write is retried in place without re-running the consumer or re-sending the Telegram reply. Therefore transient GitHub persistence failures do not create duplicate replies in the same worker.
+
+There remains a narrow process-crash window between successful `sendMessage` and successful checkpoint persistence. Exactly-once outbound delivery cannot be guaranteed without an idempotency primitive from the downstream Telegram send operation.
 
 ## Consumer isolation
 
@@ -122,10 +152,12 @@ GitHub Actions concurrency keeps only one Receiver worker executing at a time. A
 | consumer fails | current update is not advanced; Receiver retries after backoff |
 | Telegram `sendMessage` fails | current update is not advanced; Receiver retries after backoff |
 | worker dies before reply | Telegram can return the unconfirmed update to the next worker |
-| worker dies after successful reply but before the next confirming `getUpdates` | the incoming update can be replayed and a duplicate reply is possible |
+| checkpoint write temporarily fails | same checkpoint is retried without re-running consumer/send |
+| worker dies after reply but before checkpoint persistence | that update can be replayed and a duplicate reply is possible |
+| worker restarts normally | checkpoint restores the next offset and suppresses already completed updates |
 | worker chain disappears | watchdog requests another worker |
 
-The duplicate window is deliberately documented rather than solved by reintroducing repository writes into the hot path.
+The residual duplicate window is deliberately documented rather than solved by moving repository writes back in front of `sendMessage`.
 
 ## Deprecated architecture
 
