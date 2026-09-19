@@ -155,7 +155,7 @@ class RuntimeEnvironmentTests(unittest.TestCase):
             args = type("Args", (), {"config": str(path)})()
             self.assertEqual(receiver.command_check(args), 0)
 
-    def test_runtime_requires_queue_token(self):
+    def test_runtime_without_queue_token(self):
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.json"
             consumer_dir = Path(directory) / "consumer"
@@ -179,8 +179,8 @@ class RuntimeEnvironmentTests(unittest.TestCase):
                 "CONSUMER_DIR": str(consumer_dir),
             }
             with patch.dict(os.environ, env, clear=True):
-                with self.assertRaises(receiver.ReceiverError):
-                    receiver.Runtime.from_environment(str(config_path))
+                runtime = receiver.Runtime.from_environment(str(config_path))
+            self.assertEqual(runtime.allowed_chat_id, "123")
 
 
 if __name__ == "__main__":
