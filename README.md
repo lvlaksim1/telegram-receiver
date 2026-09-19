@@ -114,6 +114,17 @@ The receiver refuses to start if the bot already has a Telegram webhook configur
 
 The receiver does not automatically delete an existing webhook.
 
+## Control plane
+
+The repository can be controlled through owner-only Issue commands:
+
+- `[RECEIVER_START]` — set `enabled=true` and request a worker.
+- `[RECEIVER_STOP]` — set `enabled=false` and cancel active/queued receiver runs.
+- `[RECEIVER_STATUS]` — report whether the receiver is enabled and whether a worker is active or queued.
+- `[RECEIVER_HEALTHCHECK]` — verify Telegram credentials and webhook state without calling `getUpdates`.
+
+Only Issues opened by `lvlaksim1` are accepted as control commands.
+
 ## Local tests
 
 ```bash
