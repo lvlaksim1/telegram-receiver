@@ -79,6 +79,16 @@ Do not solve this by moving GitHub persistence back in front of `sendMessage` wi
 
 The old `receiver-runtime` branch and its inbox/outbox/receipts/state files are historical evidence only. They are not authoritative runtime state.
 
+## Live operational verification
+
+After the hardened restart:
+- Receiver run #12 entered the processing loop successfully;
+- successor run #13 is queued;
+- health check returned: Telegram credentials accepted, webhook inactive, checkpoint readable, active Receiver chain present;
+- health completed without invoking `getUpdates`.
+
+The checkpoint file is initialized and readable. Its first real `last_processed_update_id` will be written after the next completed Telegram update.
+
 ## Active baseline
 
 - direct FIFO hot path;
