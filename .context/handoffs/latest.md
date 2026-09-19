@@ -1,59 +1,65 @@
 # Latest Handoff
 
-Date: 2026-09-19
+Date: 2026-09-20
 Project: `lvlaksim1/telegram-receiver`
 Branch: `main`
 
-## What was fixed
+## Accepted baseline
 
-The core Telegram dialogue defect was traced back to Receiver architecture, not inbound Telegram reception.
-
-Incoming user updates were reaching the Receiver/GitHub side promptly. The broken behavior was created after receipt:
-- the original per-update `repository_dispatch` architecture allowed independent GitHub Actions runs to overtake one another;
-- the subsequent durable `receiver-runtime` design eliminated that race but put GitHub API persistence directly in the message hot path.
-
-The hot path was simplified to:
+The active Telegram transport architecture is:
 
 ```text
-getUpdates -> isolated consumer -> sendMessage
+getUpdates -> isolated consumer -> sendMessage -> persistent checkpoint
 ```
 
-Updates are processed sequentially in numeric `update_id` order.
+The first three stages are the realtime hot path. The checkpoint is post-reply recovery state and must remain outside the user-visible response path.
 
-## Live verification
+## What is proven
 
-Confirmed by the user:
-- `TEST_D` reply arrived immediately;
+Live validation before the recovery hardening confirmed:
+- `TEST_D` replied immediately without a second trigger message;
 - replies for `1 2 3 4 5` arrived in correct order.
 
-This is the current accepted baseline.
+The direct FIFO fix is therefore the accepted realtime/order baseline.
 
-## Cleanup completed
+## Reliability hardening completed
 
-- removed temporary `direct-telegram-diagnostic.yml`;
-- removed temporary `direct-pair-diagnostic.yml`;
-- removed GitHub runtime queue code/config/tests from the active implementation;
-- updated README and `docs/ARCHITECTURE.md`;
-- restored Telegram `reply_parameters` on top of the fixed direct FIFO path;
-- created the Project Context Capsule.
+A project audit found three remaining gaps and corrected them:
+
+1. **Persistent offset/dedup**  
+   Added branch `receiver-checkpoint` with `state/checkpoint.json`. Worker startup resumes from `last_processed_update_id + 1`.
+
+2. **Competing health consumer**  
+   Removed `getUpdates` from health diagnostics. Health now checks `getMe`, webhook state, checkpoint readability and active Receiver workflow state.
+
+3. **Regression coverage**  
+   Added tests for FIFO, restart offset, replay deduplication, failed-current-update ordering and checkpoint retry without resend.
+
+Checkpoint writes occur only after the consumer/send stage. If a checkpoint write fails transiently, Receiver retries the checkpoint in place and does not run consumer/send again.
 
 ## Important exclusions
 
 Do not:
 - restore one GitHub Actions run per Telegram update;
-- put GitHub Contents/API commits back between inbound update and outbound reply;
-- treat `receiver-runtime` as current state;
+- put GitHub repository reads/writes between `getUpdates` and `sendMessage`;
+- let health or diagnostics call `getUpdates`;
+- treat the old `receiver-runtime` branch as current state;
 - move Telegram credentials into the consumer repository.
 
 ## Known limitation
 
-If the worker dies after a successful reply but before Telegram receives the next confirming offset, that update can be replayed and a duplicate reply is possible.
+A narrow duplicate window remains if the process dies after successful Telegram `sendMessage` but before the post-reply checkpoint succeeds. This is explicitly documented.
 
-## Next check
+## Current recovery state
 
-After worker restart on the cleanup commit, perform one ordinary Telegram message and verify:
-1. immediate response;
-2. visible reply binding to the original message;
-3. no second trigger message required.
+- branch: `receiver-checkpoint`
+- path: `state/checkpoint.json`
 
-If that passes, continue from this architecture rather than reopening the discarded queue designs.
+## Next verification
+
+After the worker is restarted on this hardened baseline:
+1. run `[RECEIVER_HEALTHCHECK]`;
+2. send one ordinary Telegram message and confirm immediate reply + reply binding;
+3. optionally send a short burst and confirm order remains unchanged.
+
+If these pass, continue development from this baseline.
