@@ -1,0 +1,27 @@
+{
+  "event_id": "553795849",
+  "received_at": "2026-09-19T20:11:10.992737Z",
+  "schema_version": 1,
+  "update": {
+    "message": {
+      "chat": {
+        "first_name": "Максим",
+        "id": 58338647,
+        "type": "private",
+        "username": "maksim_kat"
+      },
+      "date": 1789848670,
+      "from": {
+        "first_name": "Максим",
+        "id": 58338647,
+        "is_bot": false,
+        "is_premium": true,
+        "language_code": "ru",
+        "username": "maksim_kat"
+      },
+      "message_id": 2014,
+      "text": "TEST_A"
+    },
+    "update_id": 553795849
+  }
+}
