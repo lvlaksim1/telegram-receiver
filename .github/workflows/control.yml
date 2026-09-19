@@ -1,0 +1,108 @@
+name: Receiver Control
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  actions: write
+  contents: write
+  issues: write
+
+jobs:
+  control:
+    if: >-
+      github.event.issue.user.login == 'lvlaksim1' &&
+      contains(fromJSON('["[RECEIVER_START]","[RECEIVER_STOP]","[RECEIVER_STATUS]"]'), github.event.issue.title)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ github.token }}
+
+      - name: Execute control command
+        id: control
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMAND: ${{ github.event.issue.title }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          set_enabled() {
+            local value="$1"
+            tmp="$(mktemp)"
+            jq --argjson value "$value" '.enabled = $value' receiver-config.json > "$tmp"
+            mv "$tmp" receiver-config.json
+
+            if git diff --quiet -- receiver-config.json; then
+              return 0
+            fi
+
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add receiver-config.json
+            git commit -m "Set receiver enabled=$value"
+            git push
+          }
+
+          active_runs() {
+            gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/receiver.yml/runs?per_page=50"               --jq '[.workflow_runs[] | select(.status != "completed")]'
+          }
+
+          case "$COMMAND" in
+            "[RECEIVER_START]")
+              set_enabled true
+              printf '%s' '{"event_type":"receiver_start","client_payload":{"source":"control"}}' |
+                gh api                   --method POST                   "repos/${GITHUB_REPOSITORY}/dispatches"                   --input -
+              echo "message=START_REQUESTED" >> "$GITHUB_OUTPUT"
+              ;;
+
+            "[RECEIVER_STOP]")
+              set_enabled false
+
+              RUN_IDS="$(
+                active_runs |
+                  jq -r '.[].id'
+              )"
+
+              if [ -n "$RUN_IDS" ]; then
+                while IFS= read -r run_id; do
+                  [ -z "$run_id" ] && continue
+                  gh api                     --method POST                     "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/cancel"                     >/dev/null 2>&1 || true
+                done <<< "$RUN_IDS"
+              fi
+
+              echo "message=STOP_REQUESTED" >> "$GITHUB_OUTPUT"
+              ;;
+
+            "[RECEIVER_STATUS]")
+              ENABLED="$(jq -r '.enabled == true' receiver-config.json)"
+              RUNS="$(active_runs)"
+              ACTIVE_COUNT="$(jq 'length' <<< "$RUNS")"
+              LATEST="$(
+                gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/receiver.yml/runs?per_page=1"                   --jq 'if (.workflow_runs | length) == 0 then "none" else (.workflow_runs[0] | (.status + "/" + (.conclusion // "-") + " #" + (.run_number|tostring))) end'
+              )"
+              echo "message=STATUS enabled=$ENABLED active_or_queued=$ACTIVE_COUNT latest=$LATEST" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      - name: Report result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          JOB_STATUS: ${{ job.status }}
+          MESSAGE: ${{ steps.control.outputs.message }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$JOB_STATUS" = "success" ]; then
+            BODY="${MESSAGE:-CONTROL_OK}"
+          else
+            BODY="CONTROL_FAILED: inspect the Actions run"
+          fi
+
+          gh api             --method POST             "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments"             -f body="$BODY"
