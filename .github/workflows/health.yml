@@ -1,0 +1,53 @@
+name: Receiver Health Check
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  health:
+    if: github.event.issue.user.login == 'lvlaksim1' && github.event.issue.title == '[RECEIVER_HEALTHCHECK]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Telegram credentials
+        id: telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${TELEGRAM_BOT_TOKEN:-}"
+          test -n "${TELEGRAM_CHAT_ID:-}"
+          OUTPUT="$(python3 receiver.py telegram-check)"
+          echo "$OUTPUT"
+          if printf '%s' "$OUTPUT" | grep -q 'webhook_active=True'; then
+            echo "webhook=active" >> "$GITHUB_OUTPUT"
+          else
+            echo "webhook=inactive" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Report result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          JOB_STATUS: ${{ job.status }}
+          WEBHOOK: ${{ steps.telegram.outputs.webhook }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$JOB_STATUS" = "success" ]; then
+            BODY="HEALTH_OK: telegram credentials accepted; webhook=$WEBHOOK"
+          else
+            BODY="HEALTH_FAILED: inspect the Actions run"
+          fi
+          gh api             --method POST             "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments"             -f body="$BODY"
