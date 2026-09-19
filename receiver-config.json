@@ -1,0 +1,9 @@
+{
+  "enabled": false,
+  "consumer_repository": "",
+  "event_type": "telegram_update",
+  "max_runtime_seconds": 19800,
+  "long_poll_timeout_seconds": 50,
+  "retry_max_seconds": 30,
+  "allowed_updates": null
+}
