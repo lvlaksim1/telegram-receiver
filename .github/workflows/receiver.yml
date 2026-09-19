@@ -13,7 +13,6 @@ permissions:
 concurrency:
   group: telegram-receiver-worker
   cancel-in-progress: false
-  queue: max
 
 jobs:
   receive:
@@ -31,30 +30,59 @@ jobs:
           ENABLED="$(jq -r '.enabled == true' receiver-config.json)"
           echo "enabled=$ENABLED" >> "$GITHUB_OUTPUT"
 
+      - name: Prepare isolated consumer
+        if: steps.state.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CONSUMER_REPOSITORY="$(jq -r '.consumer_repository // empty' receiver-config.json)"
+          CONSUMER_IMAGE="$(jq -r '.consumer_image // empty' receiver-config.json)"
+          CONSUMER_SCRIPT="$(jq -r '.consumer_script // empty' receiver-config.json)"
+
+          if ! [[ "$CONSUMER_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "Invalid consumer_repository" >&2
+            exit 1
+          fi
+
+          test -n "$CONSUMER_IMAGE"
+          test -n "$CONSUMER_SCRIPT"
+
+          rm -rf consumer
+          GIT_TERMINAL_PROMPT=0 git clone --depth=1 \
+            "https://github.com/$CONSUMER_REPOSITORY.git" consumer
+
+          test -f "consumer/$CONSUMER_SCRIPT"
+          docker pull "$CONSUMER_IMAGE"
+
       - name: Preflight
         if: steps.state.outputs.enabled == 'true'
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          CONSUMER_DISPATCH_TOKEN: ${{ secrets.CONSUMER_DISPATCH_TOKEN }}
+          TELEGRAM_BOT_TOKEN: \${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: \${{ secrets.TELEGRAM_CHAT_ID }}
+          RECEIVER_GITHUB_TOKEN: \${{ github.token }}
+          RECEIVER_REPOSITORY: \${{ github.repository }}
+          CONSUMER_DIR: \${{ github.workspace }}/consumer
         run: python3 receiver.py check
 
       - name: Queue successor
         if: steps.state.outputs.enabled == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: \${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           printf '%s' '{"event_type":"receiver_rearm","client_payload":{"source":"worker"}}' |
-            gh api               --method POST               "repos/${GITHUB_REPOSITORY}/dispatches"               --input -
+            gh api --method POST "repos/\${GITHUB_REPOSITORY}/dispatches" --input -
 
-      - name: Receive Telegram updates
+      - name: Receive and process Telegram updates
         if: steps.state.outputs.enabled == 'true'
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          CONSUMER_DISPATCH_TOKEN: ${{ secrets.CONSUMER_DISPATCH_TOKEN }}
+          TELEGRAM_BOT_TOKEN: \${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: \${{ secrets.TELEGRAM_CHAT_ID }}
+          RECEIVER_GITHUB_TOKEN: \${{ github.token }}
+          RECEIVER_REPOSITORY: \${{ github.repository }}
+          CONSUMER_DIR: \${{ github.workspace }}/consumer
         run: python3 receiver.py run
 
       - name: Disabled
