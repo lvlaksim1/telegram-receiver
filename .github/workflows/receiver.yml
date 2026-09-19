@@ -58,31 +58,31 @@ jobs:
       - name: Preflight
         if: steps.state.outputs.enabled == 'true'
         env:
-          TELEGRAM_BOT_TOKEN: \${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: \${{ secrets.TELEGRAM_CHAT_ID }}
-          RECEIVER_GITHUB_TOKEN: \${{ github.token }}
-          RECEIVER_REPOSITORY: \${{ github.repository }}
-          CONSUMER_DIR: \${{ github.workspace }}/consumer
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RECEIVER_GITHUB_TOKEN: ${{ github.token }}
+          RECEIVER_REPOSITORY: ${{ github.repository }}
+          CONSUMER_DIR: ${{ github.workspace }}/consumer
         run: python3 receiver.py check
 
       - name: Queue successor
         if: steps.state.outputs.enabled == 'true'
         env:
-          GH_TOKEN: \${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           printf '%s' '{"event_type":"receiver_rearm","client_payload":{"source":"worker"}}' |
-            gh api --method POST "repos/\${GITHUB_REPOSITORY}/dispatches" --input -
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/dispatches" --input -
 
       - name: Receive and process Telegram updates
         if: steps.state.outputs.enabled == 'true'
         env:
-          TELEGRAM_BOT_TOKEN: \${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: \${{ secrets.TELEGRAM_CHAT_ID }}
-          RECEIVER_GITHUB_TOKEN: \${{ github.token }}
-          RECEIVER_REPOSITORY: \${{ github.repository }}
-          CONSUMER_DIR: \${{ github.workspace }}/consumer
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RECEIVER_GITHUB_TOKEN: ${{ github.token }}
+          RECEIVER_REPOSITORY: ${{ github.repository }}
+          CONSUMER_DIR: ${{ github.workspace }}/consumer
         run: python3 receiver.py run
 
       - name: Disabled
