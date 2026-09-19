@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "project": "telegram-receiver",
+  "repository": "lvlaksim1/telegram-receiver",
+  "authoritative_branch": "main",
+  "entrypoint": ".context/ENTRYPOINT.md",
+  "latest_handoff": ".context/handoffs/latest.md",
+  "current_state": ".context/current/state.md",
+  "protocol": ".context/protocol.md",
+  "rules": [
+    ".context/rules/project.md"
+  ],
+  "decisions": [
+    ".context/decisions/2026-09-19-direct-fifo.md"
+  ],
+  "dialogues": [
+    ".context/dialogues/2026-09-19.md"
+  ],
+  "deprecated_runtime_branch": "receiver-runtime",
+  "updated_at": "2026-09-19"
+}
