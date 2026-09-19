@@ -10,21 +10,35 @@ import receiver
 
 class ExtractChatIdTests(unittest.TestCase):
     def test_message_chat(self):
-        self.assertEqual(
-            receiver.extract_chat_id({"message": {"chat": {"id": 123}}}),
-            "123",
-        )
+        self.assertEqual(receiver.extract_chat_id({"message": {"chat": {"id": 123}}}), "123")
 
     def test_callback_query_chat(self):
         self.assertEqual(
-            receiver.extract_chat_id(
-                {"callback_query": {"message": {"chat": {"id": -1001}}}}
-            ),
+            receiver.extract_chat_id({"callback_query": {"message": {"chat": {"id": -1001}}}}),
             "-1001",
         )
 
     def test_unknown_update_has_no_chat(self):
         self.assertIsNone(receiver.extract_chat_id({"poll": {"id": "x"}}))
+
+
+class MessageContextTests(unittest.TestCase):
+    def test_message_context(self):
+        self.assertEqual(
+            receiver.extract_message_context(
+                {
+                    "message": {
+                        "message_id": 9,
+                        "message_thread_id": 3,
+                        "chat": {"id": 123},
+                    }
+                }
+            ),
+            (123, 9, 3),
+        )
+
+    def test_missing_message_context(self):
+        self.assertEqual(receiver.extract_message_context({"poll": {}}), (None, None, None))
 
 
 class ConfigTests(unittest.TestCase):
@@ -42,37 +56,68 @@ class ConfigTests(unittest.TestCase):
                 receiver.load_config(str(path))
 
 
-class DispatchTests(unittest.TestCase):
-    def test_dispatch_envelope(self):
-        captured = {}
-
-        def fake_http_json(method, url, **kwargs):
-            captured["method"] = method
-            captured["url"] = url
-            captured["body"] = kwargs.get("body")
-            return 204, None
-
-        client = receiver.GitHubDispatchClient(
-            token="token",
-            repository="owner/repo",
-            event_type="telegram_update",
+class ConsumerActionTests(unittest.TestCase):
+    def test_reply_action(self):
+        action = receiver.validate_consumer_action(
+            "42",
+            {
+                "schema_version": 1,
+                "event_id": "42",
+                "action": "reply",
+                "text": "ответ: hi",
+            },
         )
-        with patch("receiver.http_json", side_effect=fake_http_json):
-            client.dispatch({"update_id": 42, "message": {"chat": {"id": 7}, "text": "hi"}})
+        self.assertEqual(action["action"], "reply")
+        self.assertEqual(action["text"], "ответ: hi")
 
-        self.assertEqual(captured["method"], "POST")
-        self.assertEqual(captured["url"], "https://api.github.com/repos/owner/repo/dispatches")
-        self.assertEqual(captured["body"]["event_type"], "telegram_update")
-        payload = captured["body"]["client_payload"]
-        self.assertEqual(payload["schema_version"], 1)
-        self.assertEqual(payload["update_id"], 42)
-        self.assertEqual(payload["chat_id"], "7")
-        self.assertEqual(payload["update"]["message"]["text"], "hi")
+    def test_no_reply_action(self):
+        action = receiver.validate_consumer_action(
+            "42",
+            {"schema_version": 1, "event_id": "42", "action": "no_reply"},
+        )
+        self.assertEqual(action["action"], "no_reply")
 
-    def test_missing_update_id_rejected(self):
-        client = receiver.GitHubDispatchClient("token", "owner/repo", "telegram_update")
+    def test_event_id_mismatch_rejected(self):
         with self.assertRaises(receiver.ReceiverError):
-            client.dispatch({"message": {}})
+            receiver.validate_consumer_action(
+                "42",
+                {"schema_version": 1, "event_id": "43", "action": "no_reply"},
+            )
+
+
+class RuntimeStoreTests(unittest.TestCase):
+    def test_enqueue_orders_pending_ids(self):
+        store = receiver.GitHubRuntimeStore("token", "owner/repo", "runtime")
+        files = {
+            receiver.STATE_PATH: {
+                "schema_version": 1,
+                "pending": ["10"],
+                "updated_at": "x",
+            }
+        }
+
+        def get_json(path):
+            value = files.get(path)
+            return dict(value) if value is not None else None
+
+        def put_json(path, data, **kwargs):
+            files[path] = json.loads(json.dumps(data))
+            return True
+
+        store.get_json = get_json
+        store.put_json = put_json
+
+        self.assertEqual(store.enqueue({"update_id": 2, "message": {}}), "queued")
+        self.assertEqual(files[receiver.STATE_PATH]["pending"], ["2", "10"])
+
+    def test_completed_update_is_not_requeued(self):
+        store = receiver.GitHubRuntimeStore("token", "owner/repo", "runtime")
+        store.get_json = lambda path: (
+            {"schema_version": 1, "event_id": "2"}
+            if path == "runtime/receipts/2.json"
+            else None
+        )
+        self.assertEqual(store.enqueue({"update_id": 2}), "completed")
 
 
 class RuntimeEnvironmentTests(unittest.TestCase):
@@ -83,15 +128,19 @@ class RuntimeEnvironmentTests(unittest.TestCase):
             args = type("Args", (), {"config": str(path)})()
             self.assertEqual(receiver.command_check(args), 0)
 
-    def test_runtime_requires_dispatch_token(self):
+    def test_runtime_requires_queue_token(self):
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "config.json"
-            path.write_text(
+            config_path = Path(directory) / "config.json"
+            consumer_dir = Path(directory) / "consumer"
+            consumer_dir.mkdir()
+            (consumer_dir / "consumer.py").write_text("pass", encoding="utf-8")
+            config_path.write_text(
                 json.dumps(
                     {
                         "enabled": True,
-                        "consumer_repository": "owner/repo",
-                        "event_type": "telegram_update",
+                        "runtime_branch": "receiver-runtime",
+                        "consumer_image": "python:3.12-slim",
+                        "consumer_script": "consumer.py",
                     }
                 ),
                 encoding="utf-8",
@@ -99,10 +148,12 @@ class RuntimeEnvironmentTests(unittest.TestCase):
             env = {
                 "TELEGRAM_BOT_TOKEN": "bot-token",
                 "TELEGRAM_CHAT_ID": "123",
+                "RECEIVER_REPOSITORY": "owner/repo",
+                "CONSUMER_DIR": str(consumer_dir),
             }
             with patch.dict(os.environ, env, clear=True):
                 with self.assertRaises(receiver.ReceiverError):
-                    receiver.Runtime.from_environment(str(path))
+                    receiver.Runtime.from_environment(str(config_path))
 
 
 if __name__ == "__main__":
