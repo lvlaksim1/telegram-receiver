@@ -5,6 +5,7 @@ on:
     types: [opened]
 
 permissions:
+  actions: read
   contents: read
   issues: write
 
@@ -31,13 +32,34 @@ jobs:
           echo "$OUTPUT"
           if printf '%s' "$OUTPUT" | grep -q 'webhook_active=True'; then
             echo "webhook=active" >> "$GITHUB_OUTPUT"
-            echo "probe=skipped" >> "$GITHUB_OUTPUT"
           else
             echo "webhook=inactive" >> "$GITHUB_OUTPUT"
-            PROBE="$(python3 receiver.py telegram-probe)"
-            echo "$PROBE"
-            echo "probe=ok" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Check persistent checkpoint
+        id: checkpoint
+        env:
+          RECEIVER_GITHUB_TOKEN: ${{ github.token }}
+          RECEIVER_REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUTPUT="$(python3 receiver.py checkpoint-check)"
+          echo "$OUTPUT"
+          echo "status=ok" >> "$GITHUB_OUTPUT"
+
+      - name: Check Receiver worker
+        id: worker
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTIVE_COUNT="$(
+            gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/receiver.yml/runs?per_page=50"               --jq '[.workflow_runs[] | select(.status != "completed")] | length'
+          )"
+          echo "active_count=$ACTIVE_COUNT" >> "$GITHUB_OUTPUT"
+          test "$ACTIVE_COUNT" -gt 0
 
       - name: Report result
         if: always()
@@ -46,15 +68,14 @@ jobs:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           JOB_STATUS: ${{ job.status }}
           WEBHOOK: ${{ steps.telegram.outputs.webhook }}
-          PROBE: ${{ steps.telegram.outputs.probe }}
+          CHECKPOINT: ${{ steps.checkpoint.outputs.status }}
+          ACTIVE_COUNT: ${{ steps.worker.outputs.active_count }}
         shell: bash
         run: |
           set -euo pipefail
           if [ "$JOB_STATUS" = "success" ]; then
-            BODY="HEALTH_OK: telegram credentials accepted; webhook=$WEBHOOK; long_poll_probe=$PROBE; processing=direct_fifo"
+            BODY="HEALTH_OK: telegram credentials accepted; webhook=$WEBHOOK; checkpoint=$CHECKPOINT; active_receiver_runs=$ACTIVE_COUNT; processing=direct_fifo"
           else
             BODY="HEALTH_FAILED: inspect the Actions run"
           fi
-          gh api --method POST \
-            "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" \
-            -f body="$BODY"
+          gh api --method POST             "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments"             -f body="$BODY"
