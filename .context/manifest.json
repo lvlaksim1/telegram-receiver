@@ -13,7 +13,8 @@
   "current_state": ".context/current/state.md",
   "protocol": ".context/protocol.md",
   "rules": [
-    ".context/rules/project.md"
+    ".context/rules/project.md",
+    ".context/rules/project-rules.md"
   ],
   "decisions": [
     ".context/decisions/2026-09-19-direct-fifo.md",
