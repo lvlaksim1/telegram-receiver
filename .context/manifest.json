@@ -1,6 +1,11 @@
 {
-  "schema_version": 1,
-  "project": "telegram-receiver",
+  "schema_version": 3,
+  "project": {
+    "identity": ".context/project/identity.md",
+    "goals": ".context/project/goals.md",
+    "architecture": ".context/project/architecture.md",
+    "constraints": ".context/project/constraints.md"
+  },
   "repository": "lvlaksim1/telegram-receiver",
   "authoritative_branch": "main",
   "entrypoint": ".context/ENTRYPOINT.md",
@@ -12,12 +17,40 @@
   ],
   "decisions": [
     ".context/decisions/2026-09-19-direct-fifo.md",
-    ".context/decisions/2026-09-20-checkpoint-recovery.md"
+    ".context/decisions/2026-09-20-checkpoint-recovery.md",
+    ".context/decisions/2026-09-20-context-capsule-v1.3-adoption.md"
   ],
   "dialogues": [
     ".context/dialogues/2026-09-19.md",
     ".context/dialogues/2026-09-20.md"
   ],
   "deprecated_runtime_branch": "receiver-runtime",
-  "updated_at": "2026-09-20"
+  "updated_at": "2026-09-20",
+  "schema": "context-capsule-manifest",
+  "context_version": "1.3.0",
+  "installation_status": "adopted-v1.3",
+  "discovery_branch": "main",
+  "branch_mode": "single",
+  "capsule_metadata": ".context/capsule.json",
+  "current": {
+    "state": ".context/current/state.md",
+    "blockers": ".context/current/blockers.md",
+    "next": ".context/current/next.md"
+  },
+  "history": [
+    ".context/history/legacy-entrypoint-before-v1.3.md",
+    ".context/history/legacy-protocol-before-v1.3.md"
+  ],
+  "runtime": {
+    "authoritative_paths": [],
+    "volatile": true,
+    "promote_semantic_changes_only": true,
+    "checkpoint_branch": "receiver-checkpoint",
+    "checkpoint_path": "state/checkpoint.json"
+  },
+  "sync_policy": {
+    "semantic_only": true,
+    "volatile_runtime_excluded": true,
+    "atomic_git_publication": true
+  }
 }

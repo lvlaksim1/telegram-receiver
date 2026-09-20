@@ -1,35 +1,43 @@
-# Context Capsule Protocol
+# Context Capsule protocol
 
 ## Purpose
 
-The capsule preserves the project meaning needed to continue work safely in a new chat without reconstructing decisions from old workflow runs.
+A fresh chat or agent with no conversation history must be able to recover the project's durable meaning and continue from the repository alone.
 
-## Read order
+## Durable layers
 
-1. `.context/ENTRYPOINT.md`
-2. `.context/handoffs/latest.md`
-3. `.context/current/state.md`
-4. applicable `.context/rules/*`
-5. relevant `.context/decisions/*`
-6. dialogue records only when historical detail is needed
+- `project/` — identity, goals, architecture, constraints.
+- `rules/` and `decisions/` — binding rules and accepted/rejected durable choices.
+- `current/` — compact current state, unresolved blockers, and next actions.
+- `handoffs/latest.md` — concise transfer to the next chat/agent.
+- `dialogues/` — evidence-rich investigations when chronology matters.
+- `history/` — older useful context.
 
-## Record types
+## VALID vs READY
 
-Use the following semantics:
-- **FACT** — verified observation;
-- **DECISION** — accepted architecture or implementation choice;
-- **REQUIREMENT** — behavior that must hold;
-- **PREFERENCE** — user preference that affects implementation;
-- **HYPOTHESIS** — unverified explanation;
-- **BLOCKER** — condition preventing progress;
-- **OPEN** — unresolved work;
-- **DEPRECATED** — old approach retained only for history.
+`VALID` means the capsule is structurally coherent and all indexed paths are safe and resolvable inside the repository.
 
-## Update rules
+`READY` additionally means the semantic recovery set is populated enough for a fresh chat to understand the project and continue: identity, goals, architecture, constraints, current state, next action, handoff, and at least one substantive active rule or durable decision.
 
-- Record significant changes, not every conversational message.
-- Never silently rewrite history when a design changes.
-- Mark old approaches as deprecated/superseded and link to the replacement decision.
-- Keep secrets, tokens and unnecessary personal data out of the capsule.
-- Before handoff, update current state and `handoffs/latest.md`.
-- Git/code is the source of implementation facts; the capsule explains why the implementation is that way and where work should resume.
+## Semantic sync
+
+Persist durable decisions, requirements, rules, architecture changes, root causes, rejected approaches, milestones, and priority changes.
+
+Do not copy routine runtime churn such as heartbeats, leases, polling ticks, queue transitions, or transient CI state into `.context/`.
+
+## Repository mutation
+
+The canonical GitHub lifecycle prepares and validates the complete target snapshot before publication, creates one Git tree and one commit from the expected parent, rechecks the branch head, and performs a non-forced ref update.
+
+If the branch moved, the ref is not updated. Unpublished Git objects may exist, but the target branch remains unchanged.
+
+## Privacy
+
+Never persist credentials, secret values, cookies, private keys, or unnecessary sensitive personal information.
+
+## telegram-receiver project-specific persistence
+
+- Keep GitHub persistence outside the realtime reply hot path.
+- Persist semantic architecture/reliability changes in `.context/`; do not mirror routine worker lifecycle events.
+- Health/diagnostic code must never consume Telegram updates.
+- Preserve the documented residual duplicate-reply window unless a new reviewed design safely removes it.
