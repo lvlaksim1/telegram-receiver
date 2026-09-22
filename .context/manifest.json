@@ -26,9 +26,9 @@
     ".context/dialogues/2026-09-20.md"
   ],
   "deprecated_runtime_branch": "receiver-runtime",
-  "updated_at": "2026-09-20",
+  "updated_at": "2026-09-22",
   "schema": "context-capsule-manifest",
-  "context_version": "1.3.0",
+  "context_version": "1.3.1",
   "installation_status": "adopted-v1.3",
   "discovery_branch": "main",
   "branch_mode": "single",
