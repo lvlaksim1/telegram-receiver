@@ -1,7 +1,7 @@
 {
-  "last_action": "filtered",
-  "last_processed_update_id": 553795861,
+  "last_action": "reply",
+  "last_processed_update_id": 553795862,
   "schema_version": 1,
-  "telegram_message_id": null,
-  "updated_at": "2026-09-22T21:23:04.164696Z"
+  "telegram_message_id": 2212,
+  "updated_at": "2026-09-23T18:39:25.305291Z"
 }
