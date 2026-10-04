@@ -1,0 +1,11 @@
+{
+  "manager_id": "telegram-receiver-project-manager",
+  "schema": "context-capsule-manager-identity",
+  "schema_version": 1,
+  "role": "Project Manager",
+  "repository": "lvlaksim1/telegram-receiver",
+  "continuity": "runtime-independent",
+  "authority_model": "bounded-by-mandate",
+  "state_model": "beliefs-goals-intentions-plans",
+  "memory_model": "typed-with-provenance"
+}
