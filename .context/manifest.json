@@ -15,7 +15,8 @@
   "rules": [
     ".context/rules/project.md",
     ".context/rules/project-rules.md",
-    ".context/rules/batch-development-standard.md"
+    ".context/rules/batch-development-standard.md",
+    ".context/rules/local-first-workspace.md"
   ],
   "decisions": [
     ".context/decisions/2026-09-19-direct-fifo.md",
@@ -28,7 +29,7 @@
     ".context/dialogues/2026-09-20.md"
   ],
   "deprecated_runtime_branch": "receiver-runtime",
-  "updated_at": "2026-10-28",
+  "updated_at": "2026-10-30",
   "schema": "context-capsule-manifest",
   "context_version": "2.1.0",
   "installation_status": "adopted-v1.3",
