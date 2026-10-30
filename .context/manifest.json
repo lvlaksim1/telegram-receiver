@@ -14,12 +14,14 @@
   "protocol": ".context/protocol.md",
   "rules": [
     ".context/rules/project.md",
-    ".context/rules/project-rules.md"
+    ".context/rules/project-rules.md",
+    ".context/rules/batch-development-standard.md"
   ],
   "decisions": [
     ".context/decisions/2026-09-19-direct-fifo.md",
     ".context/decisions/2026-09-20-checkpoint-recovery.md",
-    ".context/decisions/2026-09-20-context-capsule-v1.3-adoption.md"
+    ".context/decisions/2026-09-20-context-capsule-v1.3-adoption.md",
+    ".context/decisions/owner-batched-development-2026-10-30.md"
   ],
   "dialogues": [
     ".context/dialogues/2026-09-19.md",
