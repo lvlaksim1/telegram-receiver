@@ -12,5 +12,21 @@
       "timeout_sec": 65
     }
   ],
-  "full_additional": []
+  "full_additional": [
+    {
+      "id": "receiver_synthetic",
+      "kind": "sandbox",
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests",
+        "-p",
+        "test_receiver.py"
+      ],
+      "timeout_sec": 85
+    }
+  ]
 }
