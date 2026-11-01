@@ -3,5 +3,30 @@
   "owner": "project:lvlaksim1/telegram-receiver",
   "created_at": "2026-11-01T11:22:58+00:00",
   "migration_status": "requires_manager_reconciliation",
-  "tasks": []
+  "tasks": [
+    {
+      "id": "TASK-HIST-20261101-telegram-receiver-hardened-real-message-e2e",
+      "title": "Проверить на реальном сообщении Telegram Receiver немедленный ответ, привязку сообщения и продвижение checkpoint",
+      "priority": "P1",
+      "status": "open",
+      "created_at": "2026-11-01T19:06:10+00:00",
+      "updated_at": "2026-11-01T19:06:10+00:00",
+      "source_handoff": "",
+      "history": [
+        {
+          "at": "2026-11-01T19:06:10+00:00",
+          "actor": "agent:ecosystem-supervisor",
+          "action": "created",
+          "detail": "direct"
+        }
+      ],
+      "acceptance_criteria": "Через разрешённый тестовый Telegram диалог получить ответ без второго входящего события, сверить reply_to origin и последний update_id в checkpoint.json; отдельно задокументировать остаточное окно дубля при аварии.",
+      "source_ref": ".context/current/next.md",
+      "source_evidence": {
+        "reference": ".context/current/next.md",
+        "sha256": "475f5212b7c33d6ed6814fcfc8e5297f28e135a3ebe017374bb0ed07ba961a70"
+      },
+      "reconciliation_status": "pending_manager_review"
+    }
+  ]
 }
